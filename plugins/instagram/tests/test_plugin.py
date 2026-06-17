@@ -84,6 +84,24 @@ async def test_row_values_mapped_correctly():
     assert row["username"] == "bob"
 
 
+async def test_recovery_hints_mapped_from_resolution():
+    res = Resolution("bob", "lookup_verified", "high",
+                     obfuscated_email="b*****b@x.com", obfuscated_phone="+1 ***-**99")
+    p = _plugin(res, user=_full_user())
+    row = await p.fetch("e@x.com")
+    assert row["recovery_email_hint"] == "b*****b@x.com"
+    assert row["recovery_phone_hint"] == "+1 ***-**99"
+    assert row["resolution_method"] == "lookup_verified"
+    assert row["resolution_confidence"] == "high"
+
+
+async def test_recovery_hints_blank_when_absent():
+    p = _plugin(Resolution("bob", "dork", "medium"), user=_full_user())
+    row = await p.fetch("e@x.com")
+    assert row["recovery_email_hint"] is None
+    assert row["recovery_phone_hint"] is None
+
+
 async def test_unresolved_email_raises_account_not_found():
     p = _plugin(None)
     with pytest.raises(AccountNotFound):

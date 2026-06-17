@@ -11,7 +11,9 @@ from instamail.base import AccountNotFound, BasePlugin
 
 from . import metrics
 from .cache import JsonCache
+from .contacts import ContactImporter
 from .harvester import AsyncRateLimiter, Harvester, ProfileNotFound
+from .lookup import InstagramLookup
 from .resolver import Resolution, Resolver
 
 _CACHE_DIR = Path(".cache/instagram")
@@ -33,27 +35,34 @@ class InstagramPlugin(BasePlugin):
         "is_business", "business_category", "public_email", "public_phone",
         "engagement_rate", "avg_likes", "avg_comments", "posts_analyzed",
         "top_hashtags", "posting_cadence_per_week", "reels_ratio", "last_post_date",
+        "recovery_email_hint", "recovery_phone_hint",
         "resolution_method", "resolution_confidence",
     ]
 
     def __init__(self, resolver=None, harvester=None):
+        sessionid = os.environ.get("INSTAGRAM_SESSIONID")
         if harvester is None:
-            sessionid = os.environ.get("INSTAGRAM_SESSIONID")
-            limiter = AsyncRateLimiter(
-                min_interval=5.0 if sessionid else 18.0,
-                jitter=lambda: 1.0 + random.random() * 0.5,
-            )
             harvester = Harvester(
                 cache=JsonCache(_CACHE_DIR / "profiles", ttl=_PROFILE_TTL),
-                rate_limiter=limiter,
+                rate_limiter=self._limiter(sessionid),
             )
         if resolver is None:
             resolver = Resolver(
                 harvester=harvester,
                 cache=JsonCache(_CACHE_DIR / "resolutions", ttl=_RESOLUTION_TTL),
+                lookup=InstagramLookup(sessionid=sessionid, rate_limiter=self._limiter(sessionid)),
+                contacts=ContactImporter(sessionid=sessionid),
             )
         self._resolver = resolver
         self._harvester = harvester
+
+    @staticmethod
+    def _limiter(sessionid: str | None) -> AsyncRateLimiter:
+        # Sensitive endpoints are paced per-platform; a session earns a faster cadence.
+        return AsyncRateLimiter(
+            min_interval=5.0 if sessionid else 18.0,
+            jitter=lambda: 1.0 + random.random() * 0.5,
+        )
 
     async def fetch(self, email: str) -> dict[str, Any]:
         resolution = await self._resolver.resolve(email)
@@ -83,6 +92,8 @@ class InstagramPlugin(BasePlugin):
             "business_category": user.get("business_category_name") or user.get("category_name"),
             "public_email": user.get("business_email"),
             "public_phone": user.get("business_phone_number"),
+            "recovery_email_hint": resolution.obfuscated_email,
+            "recovery_phone_hint": resolution.obfuscated_phone,
             "resolution_method": resolution.method,
             "resolution_confidence": resolution.confidence,
         }
