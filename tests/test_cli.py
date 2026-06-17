@@ -86,3 +86,15 @@ def test_contract_violation_returns_2(tmp_path):
     rc = main(["-i", str(inp), "-o", str(tmp_path / "o.csv"),
                "--plugins-dir", str(pdir)])
     assert rc == 2
+
+
+def test_main_loads_dotenv_for_plugins(tmp_path, monkeypatch):
+    import os
+
+    pdir, _ = _setup(tmp_path)
+    (tmp_path / ".env").write_text("INSTAMAIL_DOTENV_TEST=loaded\n")
+    monkeypatch.delenv("INSTAMAIL_DOTENV_TEST", raising=False)
+    monkeypatch.chdir(tmp_path)  # load_dotenv() searches from CWD
+    rc = main(["--list-plugins", "--plugins-dir", str(pdir)])
+    assert rc == 0
+    assert os.environ["INSTAMAIL_DOTENV_TEST"] == "loaded"  # available to plugins

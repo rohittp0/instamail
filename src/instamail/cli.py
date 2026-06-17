@@ -5,6 +5,8 @@ import sys
 from collections import Counter
 from pathlib import Path
 
+from dotenv import find_dotenv, load_dotenv
+
 from instamail.emails import clean_emails
 from instamail.loader import PluginError, load_plugins, select_plugins
 from instamail.runner import ContractViolation, iter_results
@@ -36,6 +38,10 @@ async def _drive(writer, emails, plugins, counts):
 
 
 def main(argv=None) -> int:
+    # Load .env first so env vars (e.g. plugin API keys / cookies) are available to every
+    # plugin before any plugin is imported or instantiated. Search from the working directory
+    # (usecwd) since the installed CLI lives elsewhere; real env vars take precedence.
+    load_dotenv(find_dotenv(usecwd=True))
     args = parse_args(argv)
     logging.basicConfig(
         level=logging.DEBUG if args.verbose else logging.WARNING,

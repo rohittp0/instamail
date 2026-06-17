@@ -13,3 +13,6 @@ errors.csv
 
 # On-disk resolver/harvester cache
 .cache/
+
+# Local environment / secrets (loaded by the CLI at startup)
+.env
