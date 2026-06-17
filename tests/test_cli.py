@@ -58,3 +58,31 @@ def test_unknown_plugin_returns_nonzero(tmp_path):
     rc = main(["-i", str(inp), "-o", str(tmp_path / "o.csv"),
                "--plugins-dir", str(pdir), "--plugins", "nope"])
     assert rc != 0
+
+
+def test_missing_input_file_returns_2(tmp_path):
+    pdir, _ = _setup(tmp_path)
+    rc = main(["-i", str(tmp_path / "nope.txt"), "-o", str(tmp_path / "o.csv"),
+               "--plugins-dir", str(pdir)])
+    assert rc == 2
+
+
+BAD_CONTRACT = """
+    from instamail.base import BasePlugin
+    class P(BasePlugin):
+        name = "bad"
+        fields = ["x"]
+        async def fetch(self, email):
+            return {"y": 1}
+"""
+
+
+def test_contract_violation_returns_2(tmp_path):
+    pdir = tmp_path / "plugins"
+    pdir.mkdir()
+    (pdir / "bad.py").write_text(textwrap.dedent(BAD_CONTRACT))
+    inp = tmp_path / "emails.txt"
+    inp.write_text("a@x.com\n")
+    rc = main(["-i", str(inp), "-o", str(tmp_path / "o.csv"),
+               "--plugins-dir", str(pdir)])
+    assert rc == 2

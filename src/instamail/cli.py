@@ -7,7 +7,7 @@ from pathlib import Path
 
 from instamail.emails import clean_emails
 from instamail.loader import PluginError, load_plugins, select_plugins
-from instamail.runner import iter_results
+from instamail.runner import ContractViolation, iter_results
 from instamail.writer import CsvWriter, HeaderMismatch
 
 log = logging.getLogger("instamail")
@@ -58,7 +58,12 @@ def main(argv=None) -> int:
         log.error("missing required -i/--input")
         return 2
 
-    emails = clean_emails(Path(args.input).read_text().splitlines())
+    input_path = Path(args.input)
+    try:
+        emails = clean_emails(input_path.read_text().splitlines())
+    except OSError as e:
+        log.error("cannot read input file %r: %s", str(input_path), e)
+        return 2
     writer = CsvWriter(Path(args.output), plugins)
     try:
         done = writer.already_processed()
@@ -71,6 +76,9 @@ def main(argv=None) -> int:
     counts: Counter = Counter()
     try:
         asyncio.run(_drive(writer, todo, plugins, counts))
+    except ContractViolation as e:
+        log.error("%s", e)
+        return 2
     finally:
         writer.close()
 
