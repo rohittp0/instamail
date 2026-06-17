@@ -51,7 +51,6 @@ class InstagramPlugin(BasePlugin):
             resolver = Resolver(
                 harvester=harvester,
                 cache=JsonCache(_CACHE_DIR / "resolutions", ttl=_RESOLUTION_TTL),
-                intelx_api_key=os.environ.get("INTELX_API_KEY"),
             )
         self._resolver = resolver
         self._harvester = harvester

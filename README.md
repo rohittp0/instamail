@@ -258,19 +258,22 @@ email with a user's Instagram profile: `id`, `followers`, `following`, `posts`, 
 instamail -i emails.txt --plugins instagram -o out.csv
 ```
 
-**How it works.** It first resolves the email to a username (best-effort: IntelX breach lookup →
-DuckDuckGo dork → username-permutation gated by a profile name match), then harvests the public
-profile anonymously via Instagram's `web_profile_info` endpoint (Chrome TLS impersonation via
-`curl_cffi`). Avg/max views exist only for video/reel posts; private/photo-only accounts leave
-those cells blank. Each row records `resolution_method` and `resolution_confidence` so you can
-judge a hit's trustworthiness.
+**How it works.** It first resolves the email to a username (best-effort: DuckDuckGo dork →
+username-permutation gated by a profile name match), then harvests the public profile anonymously
+via Instagram's `web_profile_info` endpoint (Chrome TLS impersonation via `curl_cffi`). Avg/max
+views exist only for video/reel posts; private/photo-only accounts leave those cells blank. Each
+row records `resolution_method` and `resolution_confidence` so you can judge a hit's trustworthiness.
+
+> **On breach-data resolution:** a breach-lookup resolver (IntelX) was evaluated and dropped. The
+> free tier's selector/phonebook API (which would return `instagram.com/<handle>`) is paid-gated,
+> and its search API returns only breach *dataset metadata* (never usernames) — so it could not
+> yield Instagram handles. Resolution therefore relies on dorking + permutation.
 
 **Environment variables (optional but recommended):**
 
 | Variable | Effect |
 |---|---|
 | `INSTAGRAM_SESSIONID` | An `instagram.com` `sessionid` cookie. Sharply reduces 401s and lets the plugin fetch faster (~5s vs ~18s min interval). |
-| `INTELX_API_KEY` | Enables the IntelX breach-data resolver (free tier). Without it, resolution falls back to dorking + permutation only. |
 
 **Expectations.** Email→Instagram resolution is inherently **low-yield** — Instagram severs that
 link, so most emails will land in the log as `not_found`. Throughput is intentionally **slow**

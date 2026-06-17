@@ -52,39 +52,20 @@ async def _miss(_email):
     return None
 
 
-async def test_breach_hit_short_circuits(tmp_path):
+async def test_dork_hit_short_circuits():
     h = FakeHarvester({})
-    r = Resolver(harvester=h, intelx_api_key="key", breach_lookup=_hit, dork_lookup=_miss)
+    r = Resolver(harvester=h, dork_lookup=_hit)
     res = await r.resolve("john.smith@x.com")
     assert res.username == "johnny"
-    assert res.method == "breach"
-    assert res.confidence == "high"
+    assert res.method == "dork"
+    assert res.confidence == "medium"
     assert h.looked_up == []  # permutation never ran
 
 
-async def test_breach_skipped_without_api_key_falls_to_dork():
-    h = FakeHarvester({})
-
-    async def dork(_e):
-        return "janedoe"
-
-    called = []
-
-    async def breach(_e):
-        called.append(True)
-        return "should_not_be_used"
-
-    r = Resolver(harvester=h, intelx_api_key=None, breach_lookup=breach, dork_lookup=dork)
-    res = await r.resolve("jane@x.com")
-    assert res.username == "janedoe"
-    assert res.method == "dork"
-    assert called == []  # breach skipped entirely without a key
-
-
 async def test_permutation_requires_name_match():
-    # breach+dork miss; candidate "johnsmith" exists with a matching name
+    # dork misses; candidate "johnsmith" exists with a matching name
     h = FakeHarvester({"johnsmith": "John Smith", "john_smith": None, "john.smith": None})
-    r = Resolver(harvester=h, breach_lookup=_miss, dork_lookup=_miss)
+    r = Resolver(harvester=h, dork_lookup=_miss)
     res = await r.resolve("john.smith@x.com")
     assert res.username == "johnsmith"
     assert res.method == "permutation"
@@ -94,29 +75,14 @@ async def test_permutation_requires_name_match():
 async def test_permutation_rejects_name_mismatch():
     # candidate exists but the name is unrelated -> not accepted
     h = FakeHarvester({"johnsmith": "Totally Different", "john_smith": None, "john.smith": None})
-    r = Resolver(harvester=h, breach_lookup=_miss, dork_lookup=_miss)
+    r = Resolver(harvester=h, dork_lookup=_miss)
     assert await r.resolve("john.smith@x.com") is None
 
 
 async def test_all_miss_returns_none():
     h = FakeHarvester({})  # every permutation -> ProfileNotFound
-    r = Resolver(harvester=h, breach_lookup=_miss, dork_lookup=_miss)
+    r = Resolver(harvester=h, dork_lookup=_miss)
     assert await r.resolve("nobody@x.com") is None
-
-
-async def test_breach_exception_falls_through_to_dork():
-    h = FakeHarvester({})
-
-    async def breach_boom(_e):
-        raise RuntimeError("intelx returned non-JSON")
-
-    async def dork(_e):
-        return "janedoe"
-
-    r = Resolver(harvester=h, intelx_api_key="k", breach_lookup=breach_boom, dork_lookup=dork)
-    res = await r.resolve("x@y.com")
-    assert res.username == "janedoe"  # a failing breach step must not abort the email
-    assert res.method == "dork"
 
 
 async def test_dork_exception_falls_through_to_permutation():
@@ -125,7 +91,7 @@ async def test_dork_exception_falls_through_to_permutation():
     async def dork_boom(_e):
         raise RuntimeError("ddg blocked")
 
-    r = Resolver(harvester=h, breach_lookup=_miss, dork_lookup=dork_boom)
+    r = Resolver(harvester=h, dork_lookup=dork_boom)  # a failing dork step must not abort
     res = await r.resolve("nasa@x.com")
     assert res.username == "nasa"
     assert res.method == "permutation"
@@ -136,11 +102,11 @@ async def test_resolution_is_cached(tmp_path):
     h = FakeHarvester({})
     calls = []
 
-    async def breach(e):
+    async def dork(e):
         calls.append(e)
         return "johnny"
 
-    r = Resolver(harvester=h, intelx_api_key="k", breach_lookup=breach, dork_lookup=_miss, cache=cache)
+    r = Resolver(harvester=h, dork_lookup=dork, cache=cache)
     first = await r.resolve("john@x.com")
     second = await r.resolve("john@x.com")
     assert first.username == second.username == "johnny"
