@@ -63,3 +63,6 @@ per-platform enrichment plugins concurrently.
   normalized form is used for dedup and passed to plugins; invalid lines are
   logged and skipped. Rows appear in first-seen order after dedup. `email-validator`
   is the framework's one runtime dependency; plugins bring their own HTTP clients.
+  The normalized email is **fully lowercased** (local part and domain) for both
+  dedup and CSV output — email local parts are treated case-insensitively, which
+  keeps dedup consistent with what is written out.
