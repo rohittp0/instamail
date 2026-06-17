@@ -247,6 +247,36 @@ charlie@example.com,,,
 
 (Charlie has no Faceblook account, so those cells are blank.)
 
+## Included Plugin: Instagram
+
+The bundled `instagram` plugin (`plugins/instagram.py` → `instamail.instagram.*`) enriches an
+email with a user's Instagram profile: `id`, `followers`, `following`, `posts`, `avg_views`,
+`max_views`, plus profile, business-contact, engagement, and content-signal fields (run
+`instamail --list-plugins` for the full list).
+
+```bash
+instamail -i emails.txt --plugins instagram -o out.csv
+```
+
+**How it works.** It first resolves the email to a username (best-effort: IntelX breach lookup →
+DuckDuckGo dork → username-permutation gated by a profile name match), then harvests the public
+profile anonymously via Instagram's `web_profile_info` endpoint (Chrome TLS impersonation via
+`curl_cffi`). Avg/max views exist only for video/reel posts; private/photo-only accounts leave
+those cells blank. Each row records `resolution_method` and `resolution_confidence` so you can
+judge a hit's trustworthiness.
+
+**Environment variables (optional but recommended):**
+
+| Variable | Effect |
+|---|---|
+| `INSTAGRAM_SESSIONID` | An `instagram.com` `sessionid` cookie. Sharply reduces 401s and lets the plugin fetch faster (~5s vs ~18s min interval). |
+| `INTELX_API_KEY` | Enables the IntelX breach-data resolver (free tier). Without it, resolution falls back to dorking + permutation only. |
+
+**Expectations.** Email→Instagram resolution is inherently **low-yield** — Instagram severs that
+link, so most emails will land in the log as `not_found`. Throughput is intentionally **slow**
+(anonymous rate limiting); results are cached under `.cache/instagram/` and the framework's
+autoresume makes reruns cheap. Run from a **residential/mobile IP** — datacenter IPs are blocked.
+
 ## Concurrency Model
 
 - **Per-plugin concurrency:** each plugin gets its own `asyncio.Semaphore(max_concurrency)`. If a plugin has `max_concurrency=5`, at most 5 of its `fetch()` calls run simultaneously.
