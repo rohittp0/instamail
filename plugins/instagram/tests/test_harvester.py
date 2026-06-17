@@ -99,3 +99,25 @@ async def test_cache_hit_skips_network(tmp_path):
     user = await h.fetch_profile("bob")
     assert user["id"] == "42"
     assert session.calls == []
+
+
+class _BadJsonResp:
+    status_code = 200
+    headers = {}
+
+    def json(self):
+        raise ValueError("response body is not JSON (soft block / login wall)")
+
+
+async def test_non_json_200_then_success_retries():
+    session = FakeSession([_BadJsonResp(), FakeResp(200, _user_payload())])
+    h = _harvester(session)
+    user = await h.fetch_profile("bob")
+    assert user["id"] == "42"  # recovered after the non-JSON soft block
+
+
+async def test_persistent_non_json_200_raises_harvest_error():
+    session = FakeSession([_BadJsonResp() for _ in range(10)])
+    h = _harvester(session, max_retries=3)
+    with pytest.raises(HarvestError):
+        await h.fetch_profile("bob")

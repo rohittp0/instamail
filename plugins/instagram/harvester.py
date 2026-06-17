@@ -95,7 +95,15 @@ class Harvester:
             )
             status = resp.status_code
             if status == 200:
-                user = ((resp.json() or {}).get("data") or {}).get("user")
+                try:
+                    payload = resp.json()
+                except Exception:
+                    payload = None
+                if payload is None:
+                    # non-JSON 200 = soft block / login wall; back off and retry
+                    await self._sleep(self._retry_delay(attempt, resp))
+                    continue
+                user = (payload.get("data") or {}).get("user")
                 if not user:
                     raise ProfileNotFound(username)
                 if self._cache is not None:

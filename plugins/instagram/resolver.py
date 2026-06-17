@@ -9,11 +9,14 @@ low-yield. Resolvers run in order and short-circuit on the first hit:
 The HTTP-bearing resolvers are injectable so the orchestration is unit-testable.
 """
 
+import logging
 import re
 from dataclasses import dataclass
 from typing import Awaitable, Callable
 
 from .harvester import HarvestError, ProfileNotFound, _default_session
+
+log = logging.getLogger(__name__)
 
 _HANDLE_RE = re.compile(r"(?:https?://)?(?:www\.)?instagram\.com/([A-Za-z0-9._]+)")
 _VALID_HANDLE = re.compile(r"^[a-z0-9._]{1,30}$")
@@ -90,15 +93,23 @@ class Resolver:
             self._cache.set(email, result.__dict__ if result else None)
         return result
 
+    async def _safe(self, fn, email: str, label: str) -> str | None:
+        """Run a resolver step, degrading any failure to a miss so the chain continues."""
+        try:
+            return await fn(email)
+        except Exception as e:  # a flaky/misconfigured resolver must not abort the email
+            log.debug("instagram resolver step %s failed for %s: %s", label, email, e)
+            return None
+
     async def _run_chain(self, email: str) -> Resolution | None:
         local = email.split("@", 1)[0]
 
         if self._intelx_api_key:
-            handle = await self._breach_lookup(email)
+            handle = await self._safe(self._breach_lookup, email, "breach")
             if handle:
                 return Resolution(handle.lower(), "breach", "high")
 
-        handle = await self._dork_lookup(email)
+        handle = await self._safe(self._dork_lookup, email, "dork")
         if handle:
             return Resolution(handle.lower(), "dork", "medium")
 
@@ -125,20 +136,36 @@ class Resolver:
         )
         return extract_instagram_handle(getattr(resp, "text", "") or "")
 
+    # IntelX free-tier API host. The commercial host (2.intelx.io) returns 401 with an
+    # EMPTY body for free-tier keys, which is what produced the JSONDecodeError; the free
+    # host accepts the same key and returns JSON.
+    _INTELX_HOST = "https://free.intelx.io"
+
     async def _default_breach(self, email: str) -> str | None:
+        import asyncio
+
         session = self._session or _default_session()
         headers = {"x-key": self._intelx_api_key}
         init = await session.post(
-            "https://2.intelx.io/intelligent/search",
-            json={"term": email, "maxresults": 50, "media": 0, "sort": 2},
+            f"{self._INTELX_HOST}/intelligent/search",
+            json={"term": email, "maxresults": 50, "media": 0, "sort": 2, "terminate": []},
             headers=headers,
         )
         search_id = (init.json() or {}).get("id")
         if not search_id:
             return None
-        result = await session.get(
-            "https://2.intelx.io/intelligent/search/result",
-            params={"id": search_id},
-            headers=headers,
-        )
-        return extract_instagram_handle(getattr(result, "text", "") or "")
+        # Results are async: status 0=more, 1=done, 2=invalid id, 3=not ready yet — poll briefly.
+        for _ in range(4):
+            result = await session.get(
+                f"{self._INTELX_HOST}/intelligent/search/result",
+                params={"id": search_id, "limit": 50},
+                headers=headers,
+            )
+            data = result.json() or {}
+            handle = extract_instagram_handle(result.text)
+            if handle:
+                return handle
+            if data.get("status") in (1, 2):
+                break
+            await asyncio.sleep(1)
+        return None

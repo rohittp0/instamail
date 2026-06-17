@@ -104,6 +104,33 @@ async def test_all_miss_returns_none():
     assert await r.resolve("nobody@x.com") is None
 
 
+async def test_breach_exception_falls_through_to_dork():
+    h = FakeHarvester({})
+
+    async def breach_boom(_e):
+        raise RuntimeError("intelx returned non-JSON")
+
+    async def dork(_e):
+        return "janedoe"
+
+    r = Resolver(harvester=h, intelx_api_key="k", breach_lookup=breach_boom, dork_lookup=dork)
+    res = await r.resolve("x@y.com")
+    assert res.username == "janedoe"  # a failing breach step must not abort the email
+    assert res.method == "dork"
+
+
+async def test_dork_exception_falls_through_to_permutation():
+    h = FakeHarvester({"nasa": "NASA"})
+
+    async def dork_boom(_e):
+        raise RuntimeError("ddg blocked")
+
+    r = Resolver(harvester=h, breach_lookup=_miss, dork_lookup=dork_boom)
+    res = await r.resolve("nasa@x.com")
+    assert res.username == "nasa"
+    assert res.method == "permutation"
+
+
 async def test_resolution_is_cached(tmp_path):
     cache = JsonCache(tmp_path, ttl=1000, now=lambda: 1.0)
     h = FakeHarvester({})
