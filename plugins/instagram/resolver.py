@@ -13,7 +13,7 @@ import re
 from dataclasses import dataclass
 from typing import Awaitable, Callable
 
-from instamail.instagram.harvester import HarvestError, ProfileNotFound, _default_session
+from .harvester import HarvestError, ProfileNotFound, _default_session
 
 _HANDLE_RE = re.compile(r"(?:https?://)?(?:www\.)?instagram\.com/([A-Za-z0-9._]+)")
 _VALID_HANDLE = re.compile(r"^[a-z0-9._]{1,30}$")

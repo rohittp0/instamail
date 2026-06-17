@@ -249,7 +249,7 @@ charlie@example.com,,,
 
 ## Included Plugin: Instagram
 
-The bundled `instagram` plugin (`plugins/instagram.py` → `instamail.instagram.*`) enriches an
+The bundled `instagram` plugin (the self-contained `plugins/instagram/` package) enriches an
 email with a user's Instagram profile: `id`, `followers`, `following`, `posts`, `avg_views`,
 `max_views`, plus profile, business-contact, engagement, and content-signal fields (run
 `instamail --list-plugins` for the full list).

@@ -1,8 +1,8 @@
 import pytest
 
-from instamail.instagram.cache import JsonCache
-from instamail.instagram.harvester import ProfileNotFound
-from instamail.instagram.resolver import (
+from instagram.cache import JsonCache
+from instagram.harvester import ProfileNotFound
+from instagram.resolver import (
     Resolver,
     extract_instagram_handle,
     username_permutations,

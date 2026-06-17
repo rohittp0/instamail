@@ -1,9 +1,9 @@
 import pytest
 
 from instamail.base import AccountNotFound
-from instamail.instagram.harvester import HarvestError, ProfileNotFound
-from instamail.instagram.plugin import InstagramPlugin
-from instamail.instagram.resolver import Resolution
+from instagram.harvester import HarvestError, ProfileNotFound
+from instagram.plugin import InstagramPlugin
+from instagram.resolver import Resolution
 
 
 class FakeResolver:

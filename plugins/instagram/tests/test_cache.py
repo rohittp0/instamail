@@ -1,4 +1,4 @@
-from instamail.instagram.cache import JsonCache
+from instagram.cache import JsonCache
 
 
 def test_set_get_roundtrip(tmp_path):

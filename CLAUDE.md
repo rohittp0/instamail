@@ -69,8 +69,13 @@ Things that span multiple files and are easy to get wrong:
 
 ## Conventions
 
-- Plugins live as `.py` files in `./plugins/` (CWD-relative, overridable with `--plugins-dir`),
-  scanned at runtime — adding a plugin needs no reinstall. Files starting with `_` are ignored.
+- Plugins live in `./plugins/` (CWD-relative, overridable with `--plugins-dir`), scanned at
+  runtime — adding a plugin needs no reinstall. Two layouts: a single `foo.py` file, or a
+  self-contained package `foo/` whose `__init__.py` re-exports its plugin class (e.g.
+  `from .plugin import FooPlugin`) — the loader puts `./plugins/` on `sys.path` so intra-package
+  imports resolve, and registers the re-exported class. The bundled `instagram` plugin uses the
+  package layout (with its own `tests/`). Files/dirs starting with `_`, `__pycache__`, and a
+  top-level `tests` dir are ignored.
 - The CSV file is the only stdout-side artifact; all diagnostics (per-failure lines, skipped
   invalid emails, the end-of-run summary) go to stderr via `logging`. `-v` also logs successes.
 - `email-validator` is the **only** runtime dependency (syntax validation + normalization, DNS

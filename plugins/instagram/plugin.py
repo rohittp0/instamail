@@ -1,6 +1,6 @@
 """InstagramPlugin: resolves an email to an Instagram username (best-effort) then harvests
-public-profile metrics. The drop-in plugins/instagram.py subclasses this so the loader
-registers it (the loader only registers classes defined in the loaded module)."""
+public-profile metrics. Lives in the plugins/instagram package and is re-exported from the
+package __init__ so the loader registers it."""
 
 import os
 import random
@@ -8,10 +8,11 @@ from pathlib import Path
 from typing import Any
 
 from instamail.base import AccountNotFound, BasePlugin
-from instamail.instagram import metrics
-from instamail.instagram.cache import JsonCache
-from instamail.instagram.harvester import AsyncRateLimiter, Harvester, ProfileNotFound
-from instamail.instagram.resolver import Resolution, Resolver
+
+from . import metrics
+from .cache import JsonCache
+from .harvester import AsyncRateLimiter, Harvester, ProfileNotFound
+from .resolver import Resolution, Resolver
 
 _CACHE_DIR = Path(".cache/instagram")
 _PROFILE_TTL = 24 * 3600

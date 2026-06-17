@@ -1,4 +1,4 @@
-from instamail.instagram.metrics import compute_metrics
+from instagram.metrics import compute_metrics
 
 
 def _post(*, is_video, views=None, likes=0, comments=0, ts=0, caption=""):

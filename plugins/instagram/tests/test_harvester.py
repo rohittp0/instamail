@@ -1,7 +1,7 @@
 import pytest
 
-from instamail.instagram.cache import JsonCache
-from instamail.instagram.harvester import (
+from instagram.cache import JsonCache
+from instagram.harvester import (
     APP_ID,
     HarvestError,
     Harvester,
