@@ -10,3 +10,6 @@ dist/
 emails.txt
 out.csv
 errors.csv
+
+# On-disk resolver/harvester cache
+.cache/
