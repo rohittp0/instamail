@@ -258,27 +258,41 @@ email with a user's Instagram profile: `id`, `followers`, `following`, `posts`, 
 instamail -i emails.txt --plugins instagram -o out.csv
 ```
 
-**How it works.** It first resolves the email to a username (best-effort: DuckDuckGo dork →
-username-permutation gated by a profile name match), then harvests the public profile anonymously
-via Instagram's `web_profile_info` endpoint (Chrome TLS impersonation via `curl_cffi`). Avg/max
-views exist only for video/reel posts; private/photo-only accounts leave those cells blank. Each
-row records `resolution_method` and `resolution_confidence` so you can judge a hit's trustworthiness.
+**How it works.** It resolves the email to a username with a layered, best-effort chain
+(short-circuiting on the first confident hit), then harvests the public profile anonymously via
+Instagram's `web_profile_info` endpoint (Chrome TLS impersonation via `curl_cffi`). The chain,
+in order:
 
-> **On breach-data resolution:** a breach-lookup resolver (IntelX) was evaluated and dropped. The
-> free tier's selector/phonebook API (which would return `instagram.com/<handle>`) is paid-gated,
-> and its search API returns only breach *dataset metadata* (never usernames) — so it could not
-> yield Instagram handles. Resolution therefore relies on dorking + permutation.
+| # | `resolution_method` | Confidence | Technique |
+|---|---|---|---|
+| 1 | `contact_import` | **high** | Uploads the email as a phone-book contact to Instagram's `address_book/link` API and reads back the account Instagram itself matches. The only step that finds a handle **unrelated** to the email/name. *Needs `INSTAGRAM_SESSIONID`.* |
+| 2 | `lookup_verified` | **high** | Generates candidate handles (search-engine dork + email-local permutations — incl. dropping a trailing digit run, e.g. `tprohit9` → `tprohit`, and `+tag` sub-addressing), then asks Instagram's `users/lookup` for each existing candidate's **obfuscated recovery email** and checks it against the target (first char + last char of the local part + exact domain). A match confirms; a **mismatch refutes** and the candidate is dropped. |
+| 3 | `dork` | medium | A search-engine dork hit whose profile exists, when `users/lookup` is unavailable (blocked/throttled) to verify it. |
+| 4 | `permutation` | low | A permutation whose profile **full-name overlaps** the email local part, when `users/lookup` is unavailable. Last-resort heuristic. |
 
-**Environment variables (optional but recommended):**
+The `users/lookup` step (2) is the key precision fix over the old dork→name-match resolver: it
+**both confirms a guess and refutes a same-named stranger** (the old heuristic accepted any account
+whose name happened to overlap — a false positive). When step 2 surfaces them, the account's masked
+recovery contacts are recorded in `recovery_email_hint` / `recovery_phone_hint`. Each row records
+`resolution_method` and `resolution_confidence` so you can judge a hit's trustworthiness; avg/max
+views exist only for video/reel posts, so private/photo-only accounts leave those cells blank.
+
+> **On breach-data resolution:** a breach-lookup resolver (IntelX) was evaluated and dropped — its
+> free tier returns only breach *dataset metadata* (never usernames), so it could not yield handles.
+
+**Environment variables (optional but strongly recommended):**
 
 | Variable | Effect |
 |---|---|
-| `INSTAGRAM_SESSIONID` | An `instagram.com` `sessionid` cookie. Sharply reduces 401s and lets the plugin fetch faster (~5s vs ~18s min interval). |
+| `INSTAGRAM_SESSIONID` | An `instagram.com` `sessionid` cookie (its numeric prefix is the account id). **Required** for `contact_import` (step 1) and makes `users/lookup` (step 2) and harvesting reliable; also raises throughput (~5s vs ~18s min interval). Use a throwaway/OSINT account — step 1 uploads a contact from it. |
 
-**Expectations.** Email→Instagram resolution is inherently **low-yield** — Instagram severs that
-link, so most emails will land in the log as `not_found`. Throughput is intentionally **slow**
-(anonymous rate limiting); results are cached under `.cache/instagram/` and the framework's
-autoresume makes reruns cheap. Run from a **residential/mobile IP** — datacenter IPs are blocked.
+**Expectations.** Email→Instagram resolution is inherently lossy — Instagram severs the link — but
+the layered chain markedly improves both **recall** (contact-import finds unguessable handles) and
+**precision** (lookup verification rejects false positives). The sensitive endpoints (`users/lookup`,
+`address_book/link`) are **hard-blocked (403/429) from datacenter IPs even with a valid session** —
+run from a **residential/mobile IP**. Without a reachable `users/lookup`/session the chain degrades
+to the old dork+permutation behavior (steps 3–4). Throughput is intentionally **slow** (per-platform
+rate limiting); results are cached under `.cache/instagram/` and autoresume makes reruns cheap.
 
 ## Concurrency Model
 
