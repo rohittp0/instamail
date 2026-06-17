@@ -5,3 +5,8 @@ __pycache__/
 *.egg-info/
 build/
 dist/
+
+# OSINT input emails and tool output (never commit harvested data)
+emails.txt
+out.csv
+errors.csv
