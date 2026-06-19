@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from typing import Mapping
 
 from ..config import ENV_BRIGHTDATA, ENV_META_IG_USER, ENV_META_TOKEN, Tier
@@ -61,10 +62,23 @@ class IgSearchDiscovery(DiscoveryProvider):
     async def discover(self, terms: str, limit: int) -> list[str]:
         session = self._session or default_session()
         cookies = {"sessionid": self._sessionid} if self._sessionid else None
+
+        out = await self._query(session, terms, cookies)
+        if not out:
+            # topsearch matches account names/keywords, not long descriptive phrases — retry
+            # with the most distinctive (longest) token, e.g. "...travelanimator" -> "travelanimator".
+            tokens = [t for t in re.findall(r"[A-Za-z0-9]+", terms) if len(t) >= 4]
+            longest = max(tokens, key=len, default=None)
+            if longest and longest.lower() != terms.strip().lower():
+                log.debug("topsearch: phrase empty, retrying with token %r", longest)
+                out = await self._query(session, longest, cookies)
+        return out[:limit]
+
+    async def _query(self, session, query: str, cookies) -> list[str]:
         try:
             resp = await session.get(
                 "https://www.instagram.com/web/search/topsearch/",
-                params={"context": "blended", "query": terms},
+                params={"context": "blended", "query": query},
                 headers={"User-Agent": "Mozilla/5.0", "x-ig-app-id": "936619743392459"},
                 cookies=cookies,
             )
@@ -77,7 +91,7 @@ class IgSearchDiscovery(DiscoveryProvider):
             uname = (entry.get("user") or {}).get("username")
             if uname and uname not in out:
                 out.append(uname)
-        return out[:limit]
+        return out
 
 
 class MetaDiscovery(DiscoveryProvider):

@@ -68,6 +68,30 @@ async def test_igsearch_sends_sessionid_cookie():
     assert captured["cookies"] == {"sessionid": "SID123"}
 
 
+async def test_igsearch_falls_back_to_longest_token_for_verbose_phrase():
+    seen = []
+
+    class FakeResp:
+        status_code = 200
+
+        def __init__(self, usernames):
+            self._u = usernames
+
+        def json(self):
+            return {"users": [{"user": {"username": u}} for u in self._u]}
+
+    class FakeSession:
+        async def get(self, url, params=None, headers=None, cookies=None):
+            q = params["query"]
+            seen.append(q)
+            return FakeResp(["brandacct"] if q == "travelanimator" else [])
+
+    handles = await IgSearchDiscovery(FakeSession(), sessionid="s").discover(
+        "animated travel map travelanimator", 10)
+    assert handles == ["brandacct"]                       # recovered via longest token
+    assert seen == ["animated travel map travelanimator", "travelanimator"]
+
+
 def test_registry_prefers_topsearch_when_sessionid_present():
     chains = build_chains(env={ENV_SESSIONID: "SID"}, session=object(), use_cache=False)
     assert chains.discovery[0].name == "ig_topsearch"   # session => topsearch first
