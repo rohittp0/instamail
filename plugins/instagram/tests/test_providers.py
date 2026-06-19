@@ -1,6 +1,7 @@
 import pytest
 
-from instagram.config import (ENV_HUNTER, ENV_META_IG_USER, ENV_META_TOKEN, Tier)
+from instagram.config import (ENV_HUNTER, ENV_META_IG_USER, ENV_META_TOKEN, ENV_SESSIONID, Tier)
+from instagram.providers.discovery import IgSearchDiscovery
 from instagram.providers.email import IgEmail, WebsiteEmail, _rank_emails
 from instagram.providers.enrichment import MetaEnrichment
 from instagram.providers.registry import build_chains
@@ -46,6 +47,32 @@ def test_registry_includes_official_when_creds_present_and_tier_sorted():
     assert "hashtag_search" in names
     # FREE providers sort ahead of the OFFICIAL one
     assert names.index("ddg") < names.index("hashtag_search")
+
+
+async def test_igsearch_sends_sessionid_cookie():
+    captured = {}
+
+    class FakeResp:
+        status_code = 200
+
+        def json(self):
+            return {"users": [{"user": {"username": "creator1"}}]}
+
+    class FakeSession:
+        async def get(self, url, params=None, headers=None, cookies=None):
+            captured["cookies"] = cookies
+            return FakeResp()
+
+    handles = await IgSearchDiscovery(FakeSession(), sessionid="SID123").discover("x", 10)
+    assert handles == ["creator1"]
+    assert captured["cookies"] == {"sessionid": "SID123"}
+
+
+def test_registry_prefers_topsearch_when_sessionid_present():
+    chains = build_chains(env={ENV_SESSIONID: "SID"}, session=object(), use_cache=False)
+    assert chains.discovery[0].name == "ig_topsearch"   # session => topsearch first
+    chains_no = build_chains(env={}, session=object(), use_cache=False)
+    assert chains_no.discovery[0].name == "ddg"          # no session => ddg first
 
 
 def test_registry_max_tier_free_excludes_official_even_with_creds():

@@ -36,29 +36,37 @@ class DdgDiscovery(DiscoveryProvider):
                 params={"q": f"{terms} site:instagram.com"},
                 headers={"User-Agent": "Mozilla/5.0"},
             )
-            handles = extract_handles(getattr(resp, "text", "") or "")
+            text = getattr(resp, "text", "") or ""
+            handles = extract_handles(text)
         except Exception as exc:
             log.debug("ddg discovery failed: %s", exc)
             return []
+        if not handles and (getattr(resp, "status_code", 200) != 200 or "anomaly" in text.lower()):
+            log.warning("instagram: DuckDuckGo discovery blocked (challenge page); "
+                        "relying on other discovery providers")
         return handles[:limit]
 
 
 class IgSearchDiscovery(DiscoveryProvider):
-    """FREE-ish: Instagram topsearch endpoint (more reliable with INSTAGRAM_SESSIONID)."""
+    """FREE-ish: Instagram topsearch endpoint. Anonymous access is blocked; a valid
+    INSTAGRAM_SESSIONID cookie is what makes it return keyword-matched users."""
 
     name = "ig_topsearch"
     tier = Tier.FREE
 
-    def __init__(self, session=None):
+    def __init__(self, session=None, sessionid: str | None = None):
         self._session = session
+        self._sessionid = sessionid
 
     async def discover(self, terms: str, limit: int) -> list[str]:
         session = self._session or default_session()
+        cookies = {"sessionid": self._sessionid} if self._sessionid else None
         try:
             resp = await session.get(
                 "https://www.instagram.com/web/search/topsearch/",
                 params={"context": "blended", "query": terms},
                 headers={"User-Agent": "Mozilla/5.0", "x-ig-app-id": "936619743392459"},
+                cookies=cookies,
             )
             users = (resp.json() or {}).get("users") or []
         except Exception as exc:

@@ -44,10 +44,16 @@ def build_chains(*, window: int | None = None, max_tier: Tier = Tier.PAID,
     harvester = Harvester(session=session, sessionid=sessionid, cache=cache,
                           rate_limiter=AsyncRateLimiter(interval))
 
+    # With a session cookie, topsearch is the reliable free signal, so prefer it over the
+    # block-prone DDG scrape; without one, DDG is the only free option worth trying first.
+    ddg = DdgDiscovery(session)
+    igsearch = IgSearchDiscovery(session, sessionid)
+    free_discovery = [igsearch, ddg] if sessionid else [ddg, igsearch]
+
     return Chains(
         discovery=_pick(
-            [DdgDiscovery(session), IgSearchDiscovery(session),
-             MetaDiscovery(session, env), VendorDiscovery(session, env)], env, max_tier),
+            [*free_discovery, MetaDiscovery(session, env), VendorDiscovery(session, env)],
+            env, max_tier),
         enrichment=_pick(
             [PublicEnrichment(harvester, window),
              MetaEnrichment(session, env), VendorEnrichment(session, env)], env, max_tier),
