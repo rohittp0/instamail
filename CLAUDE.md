@@ -5,9 +5,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Status
 
 Rebuilt after a design pivot (the old email-keyed enrichment implementation was intentionally
-deleted in commit `ec6d628`; do **not** restore it). The **framework** is built and tested; real
-platform plugins are the next iteration — `plugins/` ships empty. Authoritative docs:
-`CONTEXT.md` (glossary) and `docs/adr/0001-search-driven-plugins-buffer-merge-write.md`.
+deleted in commit `ec6d628`; do **not** restore it). The **framework** is built and tested, and
+the first real plugin — `instagram` (`plugins/instagram/`) — is built and tested. Authoritative
+docs: `CONTEXT.md` (glossary, incl. the Instagram-plugin terms) and `docs/adr/` (0001 = framework,
+0002 = instagram free-first env-gated providers).
 
 ## What this is
 
@@ -68,6 +69,19 @@ One-way flow: `cli.main` → `loader` (discover/select) → `runner` (concurrent
 
 Plugins go in `plugins/` (CWD-relative, override with `--plugins-dir`), discovered at runtime —
 adding one needs no reinstall. **No autoresume/streaming** — buffer → merge → write once.
+
+## Instagram plugin (`plugins/instagram/`)
+
+Keys on `email`; turns travel terms into ranked creator records via a layered pipeline
+(`pipeline.py`): Discovery → Enrichment → Email → Verification → dedup/rank/limit. Each layer is a
+**preference chain** of providers ordered FREE→OFFICIAL→PAID (`providers/registry.py`); a provider
+is eligible only when its env credential is set, and the layer takes the **first success** so PAID
+(Bright Data/Apify vendor, Hunter) runs only as a last resort. `--instagram-max-tier` caps the tier.
+Free path = public scraping (`http.py`: `web_profile_info` via curl_cffi + DDG dorking) — **violates
+IG ToS**, logged at runtime (see ADR 0002). Official/vendor adapters have real request code but are
+mock-tested only (no live creds). Ranking uses avg/max Reel views (`metrics.py`) as a reach proxy.
+Env vars in `.env.example`. Providers are constructor-injectable into `Pipeline` for network-free
+tests (`plugins/instagram/tests/`).
 
 ## Dependencies
 

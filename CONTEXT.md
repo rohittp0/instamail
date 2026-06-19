@@ -76,3 +76,45 @@ End-of-run line on stderr counting per-plugin outcomes (ok / failed / rows) acro
   key. Plugin API credentials come from `.env`, not from `key`.
 - Key-value normalization (e.g. email casing) is the **plugin's** responsibility; the framework
   joins on exact strings and stays key-type-agnostic.
+
+## Instagram plugin
+
+The `instagram` plugin (`plugins/instagram/`) keys on **email** and turns travel search terms
+into ranked creator records via a layered pipeline. Terms specific to it:
+
+**Layer**:
+One stage of the instagram pipeline — **Discovery** (terms → candidate usernames), **Enrichment**
+(username → profile + reel-view metrics), **Email** (profile → email), **Verification** (email →
+confidence). Layers run in sequence.
+
+**Provider**:
+An interchangeable implementation of a layer (e.g. the public `web_profile_info` enrichment
+provider). Each has a **tier** and an eligibility check.
+_Avoid_: source, backend, adapter (use "provider").
+
+**Tier**:
+A provider's cost/sanction class — **FREE** (public scraping / on-platform data), **OFFICIAL**
+(Meta Graph API), **PAID** (vendor: Bright Data/Apify/Hunter). Ordering FREE→OFFICIAL→PAID drives
+the preference chain.
+
+**Preference chain**:
+A layer's eligible providers, tier-sorted; the layer takes the **first success**, so a PAID
+provider runs only as a last resort when cheaper ones returned nothing. A provider is **eligible**
+only if its required env credentials are present (presence == consent).
+
+**Reach proxy**:
+avg/max Reel view counts over a recent-reels window, used to rank "top" creators — there is no
+sanctioned API to rank arbitrary public creators by true reach.
+
+**Provenance columns**:
+`discovery_source` / `email_source` (which provider produced the handle / the email) and
+`email_confidence` (verification label). They record where each value came from.
+
+## Instagram dialogue
+
+> **Dev:** "A creator has no published email and no website — do we drop them?"
+> **Domain expert:** "No, they're emitted with a blank email key (standalone row), unless
+> `--require-email` is set. Email is the key, but a missing key is still a valid row."
+>
+> **Dev:** "Free discovery found someone — do we still call the paid vendor?"
+> **Domain expert:** "Never. The layer stops at the first success, and free is tried first."
