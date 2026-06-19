@@ -1,7 +1,8 @@
 import pytest
 
-from instagram.config import (ENV_HUNTER, ENV_META_IG_USER, ENV_META_TOKEN, ENV_SESSIONID, Tier)
-from instagram.providers.discovery import IgSearchDiscovery
+from instagram.config import (ENV_GOOGLE_CSE, ENV_GOOGLE_KEY, ENV_HUNTER, ENV_META_IG_USER,
+                              ENV_META_TOKEN, ENV_SESSIONID, Tier)
+from instagram.providers.discovery import GoogleDiscovery, IgSearchDiscovery
 from instagram.providers.email import IgEmail, WebsiteEmail, _rank_emails
 from instagram.providers.enrichment import MetaEnrichment
 from instagram.providers.registry import build_chains
@@ -116,6 +117,46 @@ async def test_igsearch_stops_early_once_limit_reached():
     handles = await IgSearchDiscovery(sess, sessionid="s").discover("travelanimator app", 1)
     assert handles == ["only"]
     assert sess.calls == 1   # first query already met the limit -> no further fan-out
+
+
+async def test_google_cse_extracts_handles_from_link_title_snippet():
+    pages = [
+        {"items": [
+            {"link": "https://www.instagram.com/wanderlust_jo/", "title": "Jo", "snippet": "travel"},
+            {"link": "https://www.instagram.com/p/ABC123/",
+             "title": "mapmaker (@route_animator) • Instagram", "snippet": "made a travel map"},
+        ]},
+        {"items": []},  # second page empty -> stop
+    ]
+
+    class FakeResp:
+        status_code = 200
+
+        def __init__(self, body):
+            self._b = body
+
+        def json(self):
+            return self._b
+
+    class FakeSession:
+        def __init__(self):
+            self.i = 0
+
+        async def get(self, url, params=None):
+            body = pages[min(self.i, len(pages) - 1)]
+            self.i += 1
+            return FakeResp(body)
+
+    env = {ENV_GOOGLE_KEY: "k", ENV_GOOGLE_CSE: "cx"}
+    handles = await GoogleDiscovery(FakeSession(), env).discover("travel map", 50)
+    # handle pulled from a profile link AND from the @mention in a /p/ post's title
+    assert handles == ["wanderlust_jo", "route_animator"]
+
+
+def test_registry_prefers_google_cse_when_configured():
+    env = {ENV_GOOGLE_KEY: "k", ENV_GOOGLE_CSE: "cx", ENV_SESSIONID: "s"}
+    chains = build_chains(env=env, session=object(), use_cache=False)
+    assert chains.discovery[0].name == "google_cse"   # Google preferred over topsearch/DDG
 
 
 def test_registry_prefers_topsearch_when_sessionid_present():

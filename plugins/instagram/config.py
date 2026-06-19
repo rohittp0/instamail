@@ -17,6 +17,8 @@ class Tier(IntEnum):
 ENV_SESSIONID = "INSTAGRAM_SESSIONID"       # optional booster for the free public path
 ENV_META_TOKEN = "META_ACCESS_TOKEN"        # official (Hashtag Search + Business Discovery)
 ENV_META_IG_USER = "META_IG_USER_ID"        # official (Business Discovery requires the IG user id)
+ENV_GOOGLE_KEY = "GOOGLE_API_KEY"           # Google Custom Search JSON API key
+ENV_GOOGLE_CSE = "GOOGLE_CSE_ID"            # Programmable Search Engine id (cx)
 ENV_BRIGHTDATA = "BRIGHTDATA_API_KEY"       # paid vendor
 ENV_APIFY = "APIFY_TOKEN"                   # paid vendor (alternative)
 ENV_HUNTER = "HUNTER_API_KEY"               # paid email finder

@@ -18,6 +18,7 @@ USER_AGENT = (
 )
 
 _HANDLE_RE = re.compile(r"(?:https?://)?(?:www\.)?instagram\.com/([A-Za-z0-9._]+)")
+_AT_RE = re.compile(r"@([A-Za-z0-9._]{1,30})")
 _RESERVED = {
     "p", "reel", "reels", "explore", "stories", "tv", "accounts", "about", "developer",
     "legal", "directory", "web", "api", "graphql", "oauth", "emails", "session",
@@ -39,6 +40,17 @@ def extract_handles(text: str) -> list[str]:
     out: list[str] = []
     for match in _HANDLE_RE.finditer(text or ""):
         handle = match.group(1).strip("/").lower()
+        if handle and handle not in _RESERVED and handle not in out:
+            out.append(handle)
+    return out
+
+
+def extract_at_mentions(text: str) -> list[str]:
+    """Return distinct @handles in text, lowercased (e.g. from a 'Name (@handle)' title).
+    Apply to titles, not snippets — snippet @mentions are usually tagged *other* accounts."""
+    out: list[str] = []
+    for match in _AT_RE.finditer(text or ""):
+        handle = match.group(1).strip(".").lower()
         if handle and handle not in _RESERVED and handle not in out:
             out.append(handle)
     return out

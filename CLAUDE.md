@@ -77,8 +77,11 @@ Keys on `email`; turns travel terms into ranked creator records via a layered pi
 **preference chain** of providers ordered FREE→OFFICIAL→PAID (`providers/registry.py`); a provider
 is eligible only when its env credential is set, and the layer takes the **first success** so PAID
 (Bright Data/Apify vendor, Hunter) runs only as a last resort. `--instagram-max-tier` caps the tier.
-Free path = public scraping (`http.py`: `web_profile_info` via curl_cffi + DDG dorking) — **violates
-IG ToS**, logged at runtime (see ADR 0002). Official/vendor adapters have real request code but are
+Free discovery: Google Custom Search JSON API (full-text, preferred when `GOOGLE_API_KEY`+
+`GOOGLE_CSE_ID` set, 100 q/day free), else IG topsearch (needs `INSTAGRAM_SESSIONID`; splits a
+phrase into distinctive tokens and unions), else DDG dorking (block-prone). Enrichment/email free
+path scrapes public endpoints (`web_profile_info` via curl_cffi) — **violates IG ToS**, logged at
+runtime (see ADR 0002). Official/vendor adapters have real request code but are
 mock-tested only (no live creds). Ranking uses avg/max Reel views (`metrics.py`) as a reach proxy.
 Env vars in `.env.example`. Providers are constructor-injectable into `Pipeline` for network-free
 tests (`plugins/instagram/tests/`).

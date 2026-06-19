@@ -13,7 +13,8 @@ from typing import Mapping
 from ..cache import JsonCache
 from ..config import CACHE_DIR, ENV_SESSIONID, PROFILE_TTL, Tier
 from ..http import AsyncRateLimiter, Harvester, default_session
-from .discovery import DdgDiscovery, IgSearchDiscovery, MetaDiscovery, VendorDiscovery
+from .discovery import (DdgDiscovery, GoogleDiscovery, IgSearchDiscovery, MetaDiscovery,
+                        VendorDiscovery)
 from .email import HunterEmail, IgEmail, WebsiteEmail
 from .enrichment import MetaEnrichment, PublicEnrichment, VendorEnrichment
 from .verify import SyntaxVerifier
@@ -44,11 +45,12 @@ def build_chains(*, window: int | None = None, max_tier: Tier = Tier.PAID,
     harvester = Harvester(session=session, sessionid=sessionid, cache=cache,
                           rate_limiter=AsyncRateLimiter(interval))
 
-    # With a session cookie, topsearch is the reliable free signal, so prefer it over the
-    # block-prone DDG scrape; without one, DDG is the only free option worth trying first.
+    # Discovery preference among free providers: Google Custom Search (full-text, reliable) when
+    # configured; else topsearch when a session cookie is present; DDG (block-prone) last.
     ddg = DdgDiscovery(session)
     igsearch = IgSearchDiscovery(session, sessionid)
-    free_discovery = [igsearch, ddg] if sessionid else [ddg, igsearch]
+    name_search = [igsearch, ddg] if sessionid else [ddg, igsearch]
+    free_discovery = [GoogleDiscovery(session, env), *name_search]
 
     return Chains(
         discovery=_pick(

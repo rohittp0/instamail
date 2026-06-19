@@ -13,8 +13,9 @@ import os
 import re
 from typing import Mapping
 
-from ..config import ENV_BRIGHTDATA, ENV_META_IG_USER, ENV_META_TOKEN, Tier
-from ..http import default_session, extract_handles
+from ..config import (ENV_BRIGHTDATA, ENV_GOOGLE_CSE, ENV_GOOGLE_KEY, ENV_META_IG_USER,
+                      ENV_META_TOKEN, Tier)
+from ..http import default_session, extract_at_mentions, extract_handles
 from .base import DiscoveryProvider
 
 log = logging.getLogger("instamail.instagram")
@@ -104,6 +105,52 @@ class IgSearchDiscovery(DiscoveryProvider):
             if uname and uname not in out:
                 out.append(uname)
         return out
+
+
+class GoogleDiscovery(DiscoveryProvider):
+    """Google Programmable Search (Custom Search JSON API), restricted to instagram.com.
+
+    Full-text web search (indexes captions/bios), so it finds creators who *describe* the
+    content even when their username doesn't match — broader than topsearch. Free 100
+    queries/day; needs GOOGLE_API_KEY + GOOGLE_CSE_ID. Handles are pulled from each result's
+    link, title, and snippet (so profile handles surface even from /p/ post URLs)."""
+
+    name = "google_cse"
+    tier = Tier.FREE  # free quota; gated on its two credentials below
+    requires_env = (ENV_GOOGLE_KEY, ENV_GOOGLE_CSE)
+
+    def __init__(self, session=None, env: Mapping[str, str] | None = None):
+        self._session = session
+        self._env = env if env is not None else os.environ
+
+    async def discover(self, terms: str, limit: int) -> list[str]:
+        session = self._session or default_session()
+        params_base = {
+            "key": self._env.get(ENV_GOOGLE_KEY), "cx": self._env.get(ENV_GOOGLE_CSE),
+            "q": f"{terms} site:instagram.com", "num": 10,
+        }
+        out: list[str] = []
+        start = 1
+        while len(out) < limit and start <= 91:   # CSE allows start up to 91 (100 results)
+            try:
+                resp = await session.get(
+                    "https://www.googleapis.com/customsearch/v1",
+                    params={**params_base, "start": start},
+                )
+                items = (resp.json() or {}).get("items") or []
+            except Exception as exc:
+                log.debug("google_cse discovery failed: %s", exc)
+                break
+            if not items:
+                break
+            for it in items:
+                # profile handle from the result URL, plus the (@handle) in the result title
+                handles = extract_handles(it.get("link") or "") + extract_at_mentions(it.get("title") or "")
+                for handle in handles:
+                    if handle not in out:
+                        out.append(handle)
+            start += 10
+        return out[:limit]
 
 
 class MetaDiscovery(DiscoveryProvider):
