@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "instamail"
 version = "0.1.0"
-description = "CLI to get creator emails from social media platforms"
+description = "Pluggable CLI to search social platforms for creator details and merge them into one CSV"
 requires-python = ">=3.14"
 dependencies = ["email-validator>=2", "curl_cffi>=0.7", "python-dotenv>=1"]
 
