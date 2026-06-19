@@ -68,7 +68,7 @@ async def test_igsearch_sends_sessionid_cookie():
     assert captured["cookies"] == {"sessionid": "SID123"}
 
 
-async def test_igsearch_falls_back_to_longest_token_for_verbose_phrase():
+async def test_igsearch_splits_phrase_and_unions_distinct_tokens():
     seen = []
 
     class FakeResp:
@@ -80,16 +80,42 @@ async def test_igsearch_falls_back_to_longest_token_for_verbose_phrase():
         def json(self):
             return {"users": [{"user": {"username": u}} for u in self._u]}
 
+    # Each distinctive token returns a different account; the full phrase returns none.
+    by_query = {"travelanimator": ["brandacct"], "animated": ["anim_acct"], "travel": ["trav_acct"]}
+
     class FakeSession:
         async def get(self, url, params=None, headers=None, cookies=None):
             q = params["query"]
             seen.append(q)
-            return FakeResp(["brandacct"] if q == "travelanimator" else [])
+            return FakeResp(by_query.get(q, []))
 
     handles = await IgSearchDiscovery(FakeSession(), sessionid="s").discover(
         "animated travel map travelanimator", 10)
-    assert handles == ["brandacct"]                       # recovered via longest token
-    assert seen == ["animated travel map travelanimator", "travelanimator"]
+    # phrase first, then distinctive tokens longest-first; results unioned (deduped, ordered)
+    assert seen[0] == "animated travel map travelanimator"
+    assert "travelanimator" in seen and "map" not in seen   # "map" (<4 chars) skipped
+    assert handles == ["brandacct", "anim_acct", "trav_acct"]
+
+
+async def test_igsearch_stops_early_once_limit_reached():
+    class FakeResp:
+        status_code = 200
+
+        def json(self):
+            return {"users": [{"user": {"username": "only"}}]}
+
+    class FakeSession:
+        def __init__(self):
+            self.calls = 0
+
+        async def get(self, url, params=None, headers=None, cookies=None):
+            self.calls += 1
+            return FakeResp()
+
+    sess = FakeSession()
+    handles = await IgSearchDiscovery(sess, sessionid="s").discover("travelanimator app", 1)
+    assert handles == ["only"]
+    assert sess.calls == 1   # first query already met the limit -> no further fan-out
 
 
 def test_registry_prefers_topsearch_when_sessionid_present():

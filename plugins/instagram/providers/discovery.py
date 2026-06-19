@@ -55,6 +55,9 @@ class IgSearchDiscovery(DiscoveryProvider):
     name = "ig_topsearch"
     tier = Tier.FREE
 
+    #: Cap topsearch calls per run so a long phrase can't fan out into many requests.
+    MAX_QUERIES = 6
+
     def __init__(self, session=None, sessionid: str | None = None):
         self._session = session
         self._sessionid = sessionid
@@ -63,16 +66,25 @@ class IgSearchDiscovery(DiscoveryProvider):
         session = self._session or default_session()
         cookies = {"sessionid": self._sessionid} if self._sessionid else None
 
-        out = await self._query(session, terms, cookies)
-        if not out:
-            # topsearch matches account names/keywords, not long descriptive phrases — retry
-            # with the most distinctive (longest) token, e.g. "...travelanimator" -> "travelanimator".
-            tokens = [t for t in re.findall(r"[A-Za-z0-9]+", terms) if len(t) >= 4]
-            longest = max(tokens, key=len, default=None)
-            if longest and longest.lower() != terms.strip().lower():
-                log.debug("topsearch: phrase empty, retrying with token %r", longest)
-                out = await self._query(session, longest, cookies)
+        # topsearch matches account names/keywords, not long phrases, and caps ~5 hits/query.
+        # So query the full phrase plus each distinctive token (longest first) and union the
+        # results — broadening recall. Generic single-word noise is meant to be trimmed
+        # downstream by --instagram-travel-only and view-based ranking.
+        out: list[str] = []
+        for query in self._queries(terms):
+            for uname in await self._query(session, query, cookies):
+                if uname not in out:
+                    out.append(uname)
+            if len(out) >= limit:
+                break
         return out[:limit]
+
+    def _queries(self, terms: str) -> list[str]:
+        full = terms.strip()
+        tokens = sorted({t for t in re.findall(r"[A-Za-z0-9]+", terms) if len(t) >= 4},
+                        key=len, reverse=True)
+        queries = ([full] if full else []) + [t for t in tokens if t.lower() != full.lower()]
+        return queries[:self.MAX_QUERIES]
 
     async def _query(self, session, query: str, cookies) -> list[str]:
         try:
