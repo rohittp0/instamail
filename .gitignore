@@ -8,8 +8,12 @@ dist/
 
 # OSINT input emails and tool output (never commit harvested data)
 emails.txt
+emails.cleaned.txt
+emails.dropped.tsv
 out.csv
 errors.csv
+email_to_instagram.csv
+email_to_instagram.checkpoint.json
 
 # On-disk resolver/harvester cache
 .cache/

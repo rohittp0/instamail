@@ -118,3 +118,37 @@ sanctioned API to rank arbitrary public creators by true reach.
 >
 > **Dev:** "Free discovery found someone — do we still call the paid vendor?"
 > **Domain expert:** "Never. The layer stops at the first success, and free is tried first."
+
+## Reverse resolution (Workflow)
+
+The `email-to-instagram` **Workflow** (`.claude/workflows/email-to-instagram.js`) runs the
+inverse of the instagram plugin: given a file of **emails**, it resolves each back to an Instagram
+**username**. It is a Claude *Workflow*, **not** a *Plugin* — it does not subclass `BasePlugin`,
+go through the CLI/loader/merge/writer, or obey the `key`/merge contract. It uses agentic web OSINT
+(built-in WebSearch/WebFetch), not the plugin's env-gated provider chains. Terms specific to it:
+
+**Reverse resolution**:
+Starting from an identity value (`email`) and resolving back to a creator handle (`username`) via
+agentic web OSINT — the inverse of the plugin pipeline (terms → … → email). Output is a CSV with
+exactly `email,username,match_confidence`.
+
+**match_confidence**:
+Confidence that a resolved `username` actually belongs to the input `email`: `high` (email and a
+single handle on the same page, or the IG bio shows that exact email), `medium` (reached via a
+corroborated identity pivot), `low` (single weak hop / unverified guess), `none` (dead-end, blank
+`username`). _Distinct from_ the plugin's `email_confidence`, which is confidence a *discovered
+creator's email* is correct — the inverted subject.
+
+**Stepping-stone pivot**:
+When no page directly ties the email to a handle, the workflow first resolves identity attributes
+of the email's owner (real name, niche, location, reused usernames on other platforms, personal
+site) and feeds them back as new search seeds to reach the handle. A bounded loop (~3 rounds) that
+early-stops the instant a `high`-confidence match is confirmed.
+
+**Checkpoint**:
+A sidecar file (`…checkpoint.json`: `{input, output, last_index, processed, total}`) that records
+how far a run got. Emails are processed in batches; after each batch the workflow appends rows to
+the CSV and advances `last_index`, so a kill or rate-limit leaves CSV and checkpoint consistent and
+re-running with the same args **resumes** from `last_index + 1`. This deliberately diverges from the
+framework's "buffer → merge → write once" model (see ADR 0003) — every processed email yields one
+row, including dead-ends (`email,,none`), so resume never re-runs a finished email.
