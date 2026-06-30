@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "instamail"
+version = "0.2.0"
+description = "Sheets-native email->Instagram reverse resolution + public stats"
+requires-python = ">=3.12"
+dependencies = [
+    "gspread>=6",       # Google Sheets I/O (input/output/dump tabs)
+    "google-auth>=2",   # service-account auth for gspread
+    "curl_cffi>=0.7",   # HTTP with Chrome TLS impersonation for the public IG path
+    "python-dotenv>=1", # load .env so secrets reach the scripts agents shell out to
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "pytest-asyncio>=0.23"]
+
+# Not an importable package — just a scripts/ toolkit + a JS workflow. Disable auto-discovery so
+# setuptools doesn't try to treat scripts/ as a package on `pip install -e .`.
+[tool.setuptools]
+packages = []
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["scripts/tests"]
+pythonpath = ["scripts"]

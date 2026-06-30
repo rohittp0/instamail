@@ -1,2 +1,17 @@
 .idea/
 .venv/
+.pytest_cache/
+__pycache__/
+*.pyc
+
+# Secrets & local data — never commit
+.env
+service-account*.json
+*.service-account.json
+.cache/
+
+# Stray local data files (legacy CSV/email artifacts)
+emails*.txt
+emails*.tsv
+*.csv
+email_to_instagram.checkpoint.json
