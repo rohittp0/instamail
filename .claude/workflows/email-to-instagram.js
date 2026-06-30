@@ -174,6 +174,7 @@ let agentsUsed = 0
 let processed = 0
 let stopReason = null
 let round = 0
+const pendingPersists = []   // persists run in the background so the next claim+resolve doesn't wait on the write
 
 while (true) {
   const projected = BATCH_SIZE * 2 + 2   // claim + resolve(+escalate) per user + persist
@@ -194,59 +195,76 @@ while (true) {
   // alone: once new work runs out, later claims may still reclaim a dead run's orphaned batch.)
   if (users.length === 0) break
 
-  // --- Resolve -> conditional Escalate, each user an independent chain (no barrier) ---
-  let escalations = 0
-  const results = await pipeline(
-    users,
-    (u) => agent(resolvePrompt(u.email, u.name), {
-      label: `resolve:${u.email}`, phase: 'Resolve', schema: RESOLVE_SCHEMA, model: 'sonnet', effort: 'medium',
-    }),
-    (found, u) => {
-      if (!found) return deadRow(u.email, true)            // agent skipped/died -> retry on resume
-      const base = {
-        email: found.email || u.email,
-        username: found.username ?? null,
-        match_confidence: found.match_confidence || 'none',
-        evidence_url: found.evidence_url || '',
-        rate_limited: !!found.rate_limited,
-      }
-      const leadGated = (base.match_confidence === 'none' || base.match_confidence === 'low') && found.needs_escalation
-      if (!leadGated) return base
-      escalations += 1
-      return agent(escalatePrompt(u.email, u.name, found), {
-        label: `escalate:${u.email}`, phase: 'Escalate', schema: RESOLVE_SCHEMA, model: 'opus', effort: 'high',
-      }).then((up) => {
-        if (!up) return base    // escalation died -> keep Sonnet's result
-        return {
-          email: up.email || u.email,
-          username: up.username ?? null,
-          match_confidence: up.match_confidence || base.match_confidence,
-          evidence_url: up.evidence_url || base.evidence_url,
-          rate_limited: !!up.rate_limited || base.rate_limited,
-        }
-      })
-    },
-  )
-  agentsUsed += users.length + escalations
+  // --- Resolve (Sonnet): the ONLY per-batch barrier. Once "fetching" is done we can claim the next
+  // batch; escalation + persist for this batch run in the background (below) and overlap it. ---
+  const found = await parallel(users.map((u) => () => agent(resolvePrompt(u.email, u.name), {
+    label: `resolve:${u.email}`, phase: 'Resolve', schema: RESOLVE_SCHEMA, model: 'sonnet', effort: 'medium',
+  })))
+  agentsUsed += users.length
 
-  const rows = results.map((r, j) => r || deadRow(users[j].email, true))
-  const rlCount = rows.filter((r) => r.rate_limited).length
+  const baseRows = found.map((f, j) => (f ? {
+    email: f.email || users[j].email,
+    username: f.username ?? null,
+    match_confidence: f.match_confidence || 'none',
+    evidence_url: f.evidence_url || '',
+    rate_limited: !!f.rate_limited,
+  } : deadRow(users[j].email, true)))
 
-  // --- Persist: stats + bio-upgrade + append (one cheap, near-zero-token Bash agent) ---
-  const persistRows = rows.map((r) => ({
-    email: r.email, username: r.username, match_confidence: r.match_confidence, evidence_url: r.evidence_url,
-  }))
-  const wrote = await agent(persistPrompt(persistRows, claimRow, `/tmp/persist_${round}.json`), {
-    label: `persist#${round}`, phase: 'Persist', schema: PERSIST_SCHEMA, model: 'haiku', effort: 'low',
+  // Lead-gated escalation targets, decided from Sonnet output before backgrounding.
+  const escTargets = []
+  found.forEach((f, j) => {
+    const b = baseRows[j]
+    if (f && (b.match_confidence === 'none' || b.match_confidence === 'low') && f.needs_escalation) {
+      escTargets.push({ idx: j, u: users[j], found: f })
+    }
   })
-  agentsUsed += 1
+  agentsUsed += escTargets.length + 1   // escalations + the persist agent (fired below)
+
+  const rlCount = baseRows.filter((r) => r.rate_limited).length   // rate-limit signal from Sonnet (sync)
+
+  // --- Background: Escalate (Opus) -> Persist for THIS batch. Not awaited here, so the next batch
+  // claims+resolves while these run. Escalation must complete before persist (it can change the row),
+  // so they're chained inside one background task. ---
+  const thisRound = round
+  const claimRowN = claimRow
+  const tag = reclaimed ? ' (recovered orphan)' : ''
   processed += users.length
 
-  const resolvedCount = rows.filter((r) => r.username).length
-  const tag = reclaimed ? ' (recovered orphan)' : ''
-  log(`Batch ${round}${tag}: ${processed} processed so far, ${resolvedCount} resolved this batch, ${(wrote && wrote.appended) || 0} rows appended.`)
+  const p = (async () => {
+    const escResults = await parallel(escTargets.map((t) => () =>
+      agent(escalatePrompt(t.u.email, t.u.name, t.found), {
+        label: `escalate:${t.u.email}`, phase: 'Escalate', schema: RESOLVE_SCHEMA, model: 'opus', effort: 'high',
+      }).then((up) => ({ idx: t.idx, up }))))
+    for (const er of escResults) {
+      if (er && er.up) {
+        const b = baseRows[er.idx]
+        baseRows[er.idx] = {
+          email: er.up.email || b.email,
+          username: er.up.username ?? null,
+          match_confidence: er.up.match_confidence || b.match_confidence,
+          evidence_url: er.up.evidence_url || b.evidence_url,
+          rate_limited: !!er.up.rate_limited || b.rate_limited,
+        }
+      }
+    }
+    const persistRows = baseRows.map((r) => ({
+      email: r.email, username: r.username, match_confidence: r.match_confidence, evidence_url: r.evidence_url,
+    }))
+    const resolvedCount = persistRows.filter((r) => r.username).length
+    const wrote = await agent(persistPrompt(persistRows, claimRowN, `/tmp/persist_${thisRound}.json`), {
+      label: `persist#${thisRound}`, phase: 'Persist', schema: PERSIST_SCHEMA, model: 'haiku', effort: 'low',
+    })
+    log(`Batch ${thisRound}${tag}: ${resolvedCount} resolved, ${escTargets.length} escalated, ${(wrote && wrote.appended) || 0} rows appended (${processed} processed so far).`)
+  })().catch((e) => log(`Batch ${thisRound} escalate/persist failed (${e}); its claim will be reclaimed from the ledger.`))
+  pendingPersists.push(p)
 
   if (rlCount > users.length / 2) { stopReason = 'rate-limited'; break }
+}
+
+// Drain outstanding background escalate/persist tasks before returning, so we don't exit mid-write.
+if (pendingPersists.length) {
+  log(`Waiting for ${pendingPersists.length} in-flight escalate/write task(s) to finish…`)
+  await Promise.all(pendingPersists)
 }
 
 if (stopReason) {
