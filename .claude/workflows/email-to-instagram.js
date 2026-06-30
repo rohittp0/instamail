@@ -28,10 +28,17 @@ log('⚠️  ToS notice: stats fetching hits the public instagram.com web_profil
   + '(same Instagram-ToS risk class as the old plugin free path). The resolver itself uses only '
   + 'third-party OSINT and never fetches instagram.com.')
 
-const BATCH_SIZE = (args && Number(args.batch_size)) || 10   // users claimed/persisted per batch
+// args may arrive as an object or a JSON string (or be absent) — coerce defensively.
+let ARGS = args
+if (typeof ARGS === 'string') { try { ARGS = JSON.parse(ARGS) } catch (e) { ARGS = {} } }
+if (!ARGS || typeof ARGS !== 'object') ARGS = {}
+
+const BATCH_SIZE = Number(ARGS.batch_size) > 0 ? Number(ARGS.batch_size) : 50  // users per batch (default 50)
 const AGENT_CAP = 950                                        // per-run lifetime ceiling (hard cap 1000)
 const TOKEN_FLOOR = 60000                                    // stop launching batches near the budget edge
 const PY = '.venv/bin/python'
+
+log(`Config: batch_size=${BATCH_SIZE} (args received as ${typeof args})`)
 
 // --- Schemas ---------------------------------------------------------------
 
