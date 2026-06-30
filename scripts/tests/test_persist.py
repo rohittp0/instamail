@@ -88,7 +88,33 @@ def test_run_wires_fetch_and_appender(public_user):
         {"email": "jane@example.com", "username": "alpha", "match_confidence": "low", "evidence_url": ""},
         {"email": "z@z.com", "username": None, "match_confidence": "none", "evidence_url": ""},
     ]
-    n = run(resolve_rows, fetch=fake_fetch, appender=fake_appender, now=lambda: "T")
+    marked = []
+    n = run(resolve_rows, fetch=fake_fetch, appender=fake_appender, now=lambda: "T",
+            mark_done=lambda: marked.append(True))
     assert n == 2
     assert len(captured) == 2
     assert captured[0][COL["resolved_at"]] == "T"
+    assert marked == [True]                       # claim ledger row closed after append
+
+
+def test_run_dedups_against_existing_output(public_user):
+    captured = []
+    fetched_usernames = []
+
+    async def fake_fetch(usernames):
+        fetched_usernames.extend(usernames)
+        s = project_profile(public_user)
+        s["stats_status"] = "ok"
+        return {u: s for u in usernames}
+
+    resolve_rows = [
+        {"email": "old@x.com", "username": "alpha", "match_confidence": "high", "evidence_url": ""},
+        {"email": "new@x.com", "username": "beta", "match_confidence": "high", "evidence_url": ""},
+        {"email": "new@x.com", "username": "beta", "match_confidence": "high", "evidence_url": ""},  # dup in-batch
+    ]
+    n = run(resolve_rows, fetch=fake_fetch, appender=lambda rs: captured.extend(rs) or len(rs),
+            now=lambda: "T", existing_emails={"old@x.com"})
+
+    assert n == 1                                  # old@ already present, new@ deduped to one
+    assert [r[COL["email"]] for r in captured] == ["new@x.com"]
+    assert fetched_usernames == ["beta"]           # stats not fetched for the skipped/dup rows

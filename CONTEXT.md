@@ -1,94 +1,120 @@
 # InstaMail
 
-A Sheets-native reverse-resolution pipeline: given emails in a Google Sheet, resolve each owner's
-Instagram **username** and public **stats** into an output sheet. A Claude **Workflow** orchestrates
-the agentic discovery; a small Python toolkit (`scripts/`) does all the I/O and stat-fetching the
-Workflow's JS sandbox cannot.
+A reverse-resolution pipeline: pull users (email + name) from the product's internal API, resolve
+each owner's Instagram **username** and public **stats**, and append the result to a Google Sheet.
+A Claude **Workflow** orchestrates the agentic discovery; a small Python toolkit (`scripts/`) does
+all the I/O and stat-fetching the Workflow's JS sandbox cannot. Concurrent runs are **parallel-safe**.
 
 ## Language
 
-**dump (tab)**:
-The raw paste target — column A, one email per row (row 1 is the `email` header). The user dumps
-whatever they have here; cleanliness is not required.
+**internal users API (input)**:
+The source of who to process — `GET …/internal/users/after/` (header `X-Internal-Key`), returning
+`{"users":[{email, first_name, last_name}]}`. **Cursor-paginated and positional** (not email-sorted):
+pass the last email of a page as `email=<cursor>` to get the users after it. _Avoid_: dump tab, input
+tab (the old Sheet-based source, removed).
 
-**input (tab)**:
-A single computed column of the emails still to process, built by **one spreadsheet formula** over
-`dump`: lowercase/trim → format-valid → **not already in `output`** → deduped. The Workflow only
-ever *reads* this tab. _Avoid_: queue, worklist.
+**name (OSINT seed)**:
+`first_name + last_name` for a user, passed into the resolve step as the strongest search seed
+(`"<name> instagram"`, name+niche pivots). It is **not** written to `output` — it only steers
+discovery.
 
 **output (tab)**:
-One row per **processed** email — the resolved handle (or blank), `match_confidence`, the full stat
-set, `stats_status`, `evidence_url`, and `resolved_at`. The Workflow only ever *appends* here. It is
-also the source of truth for **Resume**: the `input` formula subtracts it.
+The one tab the Workflow writes — one row per **processed** user: the resolved handle (or blank),
+`match_confidence`, the full stat set, `stats_status`, `evidence_url`, `resolved_at`. Append-only.
+
+**state (tab)**:
+A tiny key/value tab holding the **cursor** (B1) and the **lease-lock** cells (`lock_token` B2,
+`lock_expires` B3).
+
+**claims (tab)**:
+The recovery **ledger** — one row per claimed batch
+(`claim_id, cursor_start, cursor_end, run_id, status, lease_expires, updated_at`). A batch that is
+`in_progress` past its lease (its claimer died) is **reclaimed** and reprocessed, so no user is
+dropped; `persist.py` marks the row `done` after writing.
+
+**cursor**:
+The pagination position — the last email handed out for processing, stored in `state!B1`. **Resume**
+re-reads it and continues the API after it. It must be stored (not derived from `output`) because
+the API order is positional, not email-sorted.
+
+**Claim**:
+Atomically taking the next batch to process (`claim.py`), under the lease-lock. A claim first
+**reclaims** an expired-lease `in_progress` ledger row (recovering a dead run's batch by re-fetching
+its range); otherwise it takes **new work** — read the cursor, fetch the next `BATCH_SIZE` users,
+advance the cursor, and record a new `in_progress` claim row. Because the cursor advances under the
+lock, concurrent claimers get **disjoint** slices.
+
+**at-least-once / idempotent persist**:
+The processing guarantee: the claims ledger ensures every user is eventually processed even across
+crashes (at-least-once), and `persist.py` **dedups by email** against `output` before appending, so
+a recovery/reclaim race never writes a duplicate row. Together: effectively exactly-once output.
+
+**lease-lock**:
+A best-effort mutual-exclusion lock on the `state` tab: a claimer writes a unique token + an expiry
+(lease) and reads it back to confirm it won. The lease lets a crashed claimer's lock auto-expire.
+Held only during a Claim (fast), never during OSINT/stats.
+
+**parallel-safety**:
+The guarantee that multiple people running the Workflow at once neither process the same user nor
+write duplicate `output` rows — provided by Claim + the lease-lock. (Best-effort, not a hard
+transaction — see ADR 0003.)
 
 **Reverse resolution**:
-Starting from an `email` and resolving back to the owner's Instagram `username` via agentic web
-OSINT. Output is one `output` row per email.
+Resolving a user (email + name) back to their Instagram `username` via agentic web OSINT.
 
 **match_confidence**:
-Confidence that a resolved `username` belongs to the input `email`: `high` (email + a single handle
-on the same third-party page, **or** the fetched IG bio/personal-domain corroborates the email),
-`medium` (corroborated identity pivot), `low` (single weak hop / guess), `none` (dead-end, blank
-`username`). The `high`-by-bio case is decided **deterministically** in `persist.py`, not by the LLM.
-
-**Stepping-stone pivot**:
-When no page directly ties the email to a handle, the resolve agent first works out the owner's
-identity (name, niche, location, reused usernames on other platforms, personal site) and feeds those
-back as new search seeds. Bounded to ~one round for token efficiency.
-
-**Resume**:
-Re-running the Workflow with the same configuration picks up only unprocessed emails — because the
-`input` formula already excludes everything in `output`. **There is no checkpoint file**; the sheet
-*is* the checkpoint. Dead-ends are written (`email,,none,…`) precisely so they are not retried.
+Confidence the resolved `username` belongs to the user: `high` (email/full name + a single handle on
+the same third-party page, **or** the fetched IG bio/personal-domain corroborates the email),
+`medium` (corroborated identity pivot), `low` (single weak hop / guess), `none` (dead-end). The
+`high`-by-bio case is decided **deterministically** in `persist.py`, not by the LLM.
 
 **Stats**:
 The public profile numbers fetched for a resolved handle by the **direct, non-agentic**
-`instagram_stats.py` (followers/following/posts, verified/business/private, bio, external_url, and
-the derived avg/max views, avg likes/comments, engagement rate, reels ratio, posting cadence, last
-post date, top hashtags). Sourced from Instagram's `web_profile_info` endpoint.
+`instagram_stats.py` (followers/following/posts, verified/business/private, bio, external_url, plus
+derived avg/max views, avg likes/comments, engagement rate, reels ratio, cadence, last post date,
+top hashtags), from Instagram's `web_profile_info` endpoint.
 
 **stats_status**:
-Outcome of the stat fetch for a row: `ok`, `private` (counts kept, view-metrics blank), `not_found`,
-`blocked` (throttled / no usable session), `error`, or blank (a dead-end with no handle to fetch).
+Outcome of the stat fetch: `ok`, `private` (counts kept, view-metrics blank), `not_found`, `blocked`
+(throttled / no usable session), `error`, or blank (a dead-end with no handle to fetch).
 
 **Escalation**:
-A lead-gated second resolve pass. The cheap **Sonnet** resolve agent runs first; only when it
-returns `none`/`low` **and** flags `needs_escalation` (real leads but a reasoning gap, not a
-dead-end) does a **warm-started Opus** agent retry with the prior findings to close the chain.
-
-**evidence_url**:
-The strongest *third-party* URL the resolver used to reach the handle (audit trail). The resolver
-never fetches `instagram.com`; the profile read is Python's job.
+A lead-gated second resolve pass: the cheap **Sonnet** resolve agent runs first; only when it returns
+`none`/`low` **and** flags `needs_escalation` (real leads but a reasoning gap, not a dead-end) does a
+warm-started **Opus** agent retry with the prior findings to close the chain.
 
 ## Relationships
 
-- `dump` --(formula: clean/dedup/minus `output`)--> `input` --(read)--> **Workflow** --(append)--> `output`.
-- `output` feeds the `input` formula, which is what makes **Resume** automatic.
-- A **Resolve** agent produces a candidate handle + `match_confidence`; **Stats** + the deterministic
-  bio-upgrade may raise that confidence; **Persist** writes the merged row.
-- **Escalation** sits between the Sonnet resolve and Persist, firing only for promising-but-unresolved emails.
+- internal users API --(Claim: lease-lock → cursor → page → advance cursor)--> **Workflow**.
+- A **Resolve** agent (seeded with the user's **name**) produces a candidate handle +
+  `match_confidence`; **Stats** + the deterministic bio-upgrade may raise that confidence; **Persist**
+  appends the merged row to `output`.
+- **Escalation** sits between Sonnet resolve and Persist, firing only for promising-but-unresolved users.
+- **Resume** = the `state` **cursor**; **parallel-safety** = Claim under the **lease-lock**.
 
 ## Example dialogue
 
-> **Dev:** "An email resolves to a handle but the stats fetch is blocked — do we write the row?"
-> **Domain expert:** "Yes. Write the handle with `stats_status=blocked` and blank metrics. It still
-> counts as processed, so `input` won't surface it again. A re-run won't retry it."
+> **Dev:** "Two people start the workflow at the same time — do they step on each other?"
+> **Domain expert:** "No. Each Claim takes the lease-lock, advances the cursor, and releases it, so
+> the two runs get consecutive, non-overlapping batches. The lock is only held for the claim, not the
+> slow OSINT."
 >
-> **Dev:** "The resolver found nothing for an email. Skip it?"
-> **Domain expert:** "No — write `email,,none`. A dead-end is a result. Omitting it would make the
-> formula re-feed it every run."
+> **Dev:** "Why store a cursor instead of just resuming after the last email in output?"
+> **Domain expert:** "The API cursor is positional, not email-sorted — `h@…` can come after `r@…`.
+> The max email in output would be wrong. The stored cursor is the only correct resume point."
 >
-> **Dev:** "How does the IG bio raise confidence to high if the agent never opens instagram.com?"
-> **Domain expert:** "The stats script already fetched the profile for its numbers. `persist.py`
-> checks the email against the returned bio / external_url in plain Python — no model tokens."
+> **Dev:** "The IG bio confirms the email — who decides that?"
+> **Domain expert:** "`persist.py`, in plain Python, against the bio the stats fetch already returned.
+> No model tokens, and the resolver never opens instagram.com."
 
 ## Flagged ambiguities
 
-- **Resume is the sheet, not a file.** Never reintroduce a checkpoint file; the `output` tab + the
-  `input` formula are the resume mechanism.
-- The always-on formula dedups by *normalized address*, so Gmail dot/+tag variants are not collapsed
-  (a heavier Python clean is deliberately deferred — see the dropped `clean_emails.py`).
-- `match_confidence` (email→handle) is the only confidence here; there is no separate
-  "email validity" score — email cleaning lives entirely in the `input` formula.
-- A single Workflow run assumes it is the only writer; two concurrent runs would double-process the
-  same `input` snapshot.
+- **Resume is the `state` cursor**, advanced at *Claim* time. A crash after claiming leaves an
+  orphaned `in_progress` ledger row, which a later claim **reclaims** once the lease expires — so
+  recovery is *eventual*, not immediate.
+- **`name` is input only** — an OSINT seed, never an `output` column.
+- The lease-lock is **best-effort** (Google Sheets has no compare-and-swap); a rare double-claim is
+  possible, but `persist.py`'s email dedup makes it harmless (no duplicate rows — just redundant
+  work). Eliminating the redundant work too would need a server-side atomic claim endpoint (out of
+  scope, API is read-only).
+- `match_confidence` (user→handle) is the only confidence here.

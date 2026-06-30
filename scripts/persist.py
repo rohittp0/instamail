@@ -23,10 +23,18 @@ from __future__ import annotations
 import asyncio
 import json
 import sys
+import time
 from datetime import datetime, timezone
 
 from instagram_stats import _STAT_KEYS, fetch_stats
-from sheets_io import OUTPUT_HEADER, append_output, open_spreadsheet
+from sheets_io import (
+    OUTPUT_HEADER,
+    append_output,
+    claims_worksheet,
+    mark_claim_done,
+    open_spreadsheet,
+    read_output_emails,
+)
 
 # Free webmail providers — a matching email *domain* in a bio/url is not corroborating (everyone
 # has a gmail). Only a *personal* domain link counts toward the confidence upgrade.
@@ -122,23 +130,34 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
-def run(resolve_rows: list[dict], *, fetch=fetch_stats, appender=None, now=_now_iso) -> int:
-    """Resolve stats, build rows, append. Deps are injectable for tests.
+def run(resolve_rows: list[dict], *, fetch=fetch_stats, now=_now_iso,
+        existing_emails=frozenset(), appender, mark_done=None) -> int:
+    """Dedup against already-written emails, resolve stats, build rows, append, mark the claim done.
 
-    ``fetch`` is an async {usernames}->{username: stats} callable; ``appender`` is a
-    rows->int callable (defaults to a real sheets_io append)."""
+    Idempotent by email: rows whose email is already in ``existing_emails`` (or repeated within the
+    batch) are skipped, so a recovery reclaim or a lost-ack re-run never duplicates output. ``fetch``
+    is an async {usernames}->{username: stats} callable; ``appender`` is a rows->int callable;
+    ``mark_done`` (optional) is called after a successful append to close the claim ledger row."""
+    seen = {(e or "").strip().lower() for e in existing_emails}
+    fresh: list[dict] = []
+    for r in resolve_rows:
+        email = (r.get("email") or "").strip().lower()
+        if not email or email in seen:
+            continue
+        seen.add(email)
+        fresh.append(r)
+
     usernames = [
         (r.get("username") or "").strip().lstrip("@").lower()
-        for r in resolve_rows
+        for r in fresh
         if (r.get("username") or "").strip()
     ]
     stats_map = asyncio.run(fetch(usernames)) if usernames else {}
-    rows = build_rows(resolve_rows, stats_map, now())
-
-    if appender is None:
-        spreadsheet = open_spreadsheet()
-        return append_output(spreadsheet, rows)
-    return appender(rows)
+    rows = build_rows(fresh, stats_map, now())
+    appended = appender(rows)
+    if mark_done is not None:
+        mark_done()
+    return appended
 
 
 def main(argv=None) -> int:
@@ -151,8 +170,19 @@ def main(argv=None) -> int:
     if not isinstance(rows, list):
         print('persist: expected {"rows": [{...}]} on stdin', file=sys.stderr)
         return 2
+    claim_row = payload.get("claim_row") if isinstance(payload, dict) else None
 
-    appended = run(rows)
+    spreadsheet = open_spreadsheet()
+    existing = read_output_emails(spreadsheet)
+
+    def _append(rs):
+        return append_output(spreadsheet, rs)
+
+    def _mark_done():
+        if claim_row:
+            mark_claim_done(claims_worksheet(spreadsheet), int(claim_row), time.time())
+
+    appended = run(rows, existing_emails=existing, appender=_append, mark_done=_mark_done)
     json.dump({"appended": appended}, sys.stdout)
     sys.stdout.write("\n")
     return 0
