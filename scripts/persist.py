@@ -11,7 +11,7 @@ stdin, it:
   3. stamps resolved_at,
   4. builds the 25-cell output rows and appends them in one atomic call (sheets_io).
 
-stdin : {"rows": [{"email","username","match_confidence","evidence_url"}, ...]}
+stdin : {"rows": [{"email","username","match_confidence","evidence_url","rate_limited"}, ...]}
 stdout: {"appended": N}
 
 Usage:
@@ -137,12 +137,19 @@ def run(resolve_rows: list[dict], *, fetch=fetch_stats, now=_now_iso,
     Idempotent by email: rows whose email is already in ``existing_emails`` (or repeated within the
     batch) are skipped, so a recovery reclaim or a lost-ack re-run never duplicates output. ``fetch``
     is an async {usernames}->{username: stats} callable; ``appender`` is a rows->int callable;
-    ``mark_done`` (optional) is called after a successful append to close the claim ledger row."""
+    ``mark_done`` (optional) is called after a successful append to close the claim ledger row —
+    but only when nothing was deferred. A row that is ``rate_limited`` with no ``username`` is a
+    transient search failure, not a dead-end: it is skipped (never written as a false "no match")
+    and the claim is left open so its lease expires and the user is reclaimed and retried."""
     seen = {(e or "").strip().lower() for e in existing_emails}
     fresh: list[dict] = []
+    deferred = 0
     for r in resolve_rows:
         email = (r.get("email") or "").strip().lower()
         if not email or email in seen:
+            continue
+        if r.get("rate_limited") and not (r.get("username") or "").strip():
+            deferred += 1  # throttled with no handle -> retry later, don't persist as a dead-end
             continue
         seen.add(email)
         fresh.append(r)
@@ -155,7 +162,7 @@ def run(resolve_rows: list[dict], *, fetch=fetch_stats, now=_now_iso,
     stats_map = asyncio.run(fetch(usernames)) if usernames else {}
     rows = build_rows(fresh, stats_map, now())
     appended = appender(rows)
-    if mark_done is not None:
+    if mark_done is not None and deferred == 0:
         mark_done()
     return appended
 

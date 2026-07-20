@@ -45,7 +45,7 @@ log(`Config: batch_size=${BATCH_SIZE} (args received as ${typeof args})`)
 const CLAIM_SCHEMA = {
   type: 'object',
   additionalProperties: false,
-  required: ['users', 'exhausted', 'claim_id', 'claim_row', 'reclaimed'],
+  required: ['users', 'exhausted', 'claim_id', 'claim_row', 'reclaimed', 'outcome'],
   properties: {
     users: {
       type: 'array',
@@ -63,6 +63,12 @@ const CLAIM_SCHEMA = {
     claim_id: { type: ['string', 'null'], description: 'ledger id of this claim (null if no users)' },
     claim_row: { type: ['integer', 'null'], description: 'ledger row to mark done after persist' },
     reclaimed: { type: 'boolean', description: 'true if this batch was recovered from a dead claimer' },
+    outcome: {
+      type: 'string', enum: ['claimed', 'exhausted', 'reclaim_empty', 'drain', 'error'],
+      description: 'authoritative claim.py result: claimed=work handed out, exhausted=genuinely no '
+        + 'work left anywhere, reclaim_empty=reclaimed range trimmed to zero, drain=STOP file present '
+        + '(refused to claim), error=the claim agent/command itself failed',
+    },
   },
 }
 
@@ -104,11 +110,11 @@ const PERSIST_SCHEMA = {
 // --- Prompts ---------------------------------------------------------------
 
 function claimPrompt() {
-  return `Claim the next batch of users to process. This is parallel-safe — run the command exactly and return its output; do NOT reason about the data.
+  return `Claim the next batch of users to process. This is parallel-safe — run the command exactly and return its output verbatim; do NOT reason about the data.
 
   ${PY} scripts/claim.py ${BATCH_SIZE}
 
-It prints {"users": [{"email","name"}, ...], "exhausted": bool}. Return that as the structured result. If it errors, return {"users": [], "exhausted": true}.`
+It prints one JSON object on stdout with six fields: users, exhausted, claim_id, claim_row, reclaimed, outcome (one of "claimed"|"exhausted"|"reclaim_empty"|"drain"). Return that JSON verbatim as the structured result — anything on stderr is diagnostic only (e.g. a STOP-file warning), not part of the result. If the command errors or prints no parseable JSON, return {"users": [], "exhausted": false, "claim_id": null, "claim_row": null, "reclaimed": false, "outcome": "error"}.`
 }
 
 function resolvePrompt(email, name) {
@@ -161,7 +167,7 @@ ${json}
 Step 2 — run:
   ${PY} scripts/persist.py < ${tmpfile}
 
-The script dedups against already-written emails, fetches Instagram stats, deterministically upgrades confidence, stamps resolved_at, appends one row per new user to the output sheet, and marks the claim done. It prints {"appended": N}. Return that N as the structured result. If it errors, return appended=0.`
+The script dedups against already-written emails, fetches Instagram stats, deterministically upgrades confidence, stamps resolved_at, and appends one row per new (non-deferred) user to the output sheet. A rate_limited row with no username is deferred — not written, not counted — so its lease expires and it gets reclaimed and retried later (ADR 0004); the claim is marked done only when nothing in the batch was deferred. It prints {"appended": N}. Return that N as the structured result. If it errors, return appended=0.`
 }
 
 // --- Main loop: Claim -> Resolve -> Escalate -> Persist, batch by batch ------
@@ -191,9 +197,18 @@ while (true) {
   const users = (claim && Array.isArray(claim.users)) ? claim.users.filter((u) => u && u.email) : []
   const claimRow = claim ? claim.claim_row : null
   const reclaimed = !!(claim && claim.reclaimed)
-  // Empty means no recoverable orphan AND no new work -> truly done. (We do NOT stop on `exhausted`
-  // alone: once new work runs out, later claims may still reclaim a dead run's orphaned batch.)
-  if (users.length === 0) break
+  // Empty means no recoverable orphan AND no new work THIS round. `outcome` is the authoritative
+  // signal for why (ADR 0005) — done:true may ONLY arise from explicit outcome:"exhausted"; a
+  // drain or a claim error can never masquerade as completion. Anything unrecognized also refuses
+  // to be silently "done".
+  if (users.length === 0) {
+    const OUTCOME_TO_STOP_REASON = { drain: 'drain', error: 'claim-error', reclaim_empty: 'reclaim-empty', exhausted: null }
+    const outcome = claim ? claim.outcome : 'error'
+    stopReason = Object.prototype.hasOwnProperty.call(OUTCOME_TO_STOP_REASON, outcome)
+      ? OUTCOME_TO_STOP_REASON[outcome]
+      : 'claim-error'
+    break
+  }
 
   // --- Resolve (Sonnet): the ONLY per-batch barrier. Once "fetching" is done we can claim the next
   // batch; escalation + persist for this batch run in the background (below) and overlap it. ---
@@ -249,6 +264,7 @@ while (true) {
     }
     const persistRows = baseRows.map((r) => ({
       email: r.email, username: r.username, match_confidence: r.match_confidence, evidence_url: r.evidence_url,
+      rate_limited: r.rate_limited,
     }))
     const resolvedCount = persistRows.filter((r) => r.username).length
     const wrote = await agent(persistPrompt(persistRows, claimRowN, `/tmp/persist_${thisRound}.json`), {

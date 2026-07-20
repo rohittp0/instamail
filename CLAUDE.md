@@ -37,6 +37,7 @@ Use the in-repo venv (Python 3.14): `.venv/bin/python`.
 - Claim a batch (advances the cursor): `.venv/bin/python scripts/claim.py 10`
 - Sheet setup: `.venv/bin/python scripts/sheets_io.py ensure-sheets`
 - Run the pipeline: invoke the `email-to-instagram` Workflow (optionally `args: {batch_size}`).
+- Bounded overnight run: invoke the `schedule-windows` skill — "resume the pipeline at X, stop at Y" (any number of window pairs); see `.claude/skills/schedule-windows/SKILL.md`.
 
 ## Configuration (`.env`)
 

@@ -27,6 +27,7 @@ import json
 import sys
 import time
 import uuid
+from pathlib import Path
 
 import users_api
 from sheets_io import (
@@ -46,6 +47,16 @@ from sheets_io import (
 # exceed the time to OSINT + persist one batch; a generous value avoids reclaiming a slow-but-alive run.
 CLAIM_LEASE_SECONDS = 1800
 
+# Soft-drain signal (ADR 0005): the Workflow's JS sandbox has no filesystem access, so an external
+# scheduler that wants to stop the pipeline can only signal in through the next claim.py invocation.
+# Touching this file makes the next claim drain instead of claiming; removing it resumes normal work.
+STOP_FILE = Path(__file__).resolve().parent.parent / ".cache" / "STOP"
+
+
+def _drain_result() -> dict:
+    return {"users": [], "exhausted": False, "claim_id": None, "claim_row": None,
+            "reclaimed": False, "outcome": "drain"}
+
 
 def _trim_to_end(users: list[dict], cursor_end: str) -> list[dict]:
     """Cut a re-fetched page at the original range boundary (defensive vs a larger reclaim limit)."""
@@ -60,7 +71,8 @@ def _trim_to_end(users: list[dict], cursor_end: str) -> list[dict]:
 
 
 def claim(state_ws, claims_ws, fetch, limit: int, token: str,
-          now=time.time, lease: float = CLAIM_LEASE_SECONDS, lock: bool = True) -> dict:
+          now=time.time, lease: float = CLAIM_LEASE_SECONDS, lock: bool = True,
+          stop_check=lambda: STOP_FILE.exists()) -> dict:
     """Claim a batch (recover an expired one, else take new work). Deps injectable for tests.
 
     ``fetch`` is ``(after, limit) -> list[{email, name}]``. Everything that touches the cursor /
@@ -68,28 +80,34 @@ def claim(state_ws, claims_ws, fetch, limit: int, token: str,
     if lock:
         acquire_lock(state_ws, token)
     try:
+        # Re-check STOP under the lock: closes the race where it lands between main()'s pre-lock
+        # check and lock acquisition. Draining claims nothing — cursor/ledger stay untouched.
+        if stop_check():
+            return _drain_result()
+
         # 1. Recovery: take over a dead claimer's batch before handing out anything new.
         rec = find_reclaimable(claims_ws, now())
         if rec:
             row, claim_id, cursor_start, cursor_end = rec
             users = _trim_to_end(fetch(after=cursor_start or None, limit=limit), cursor_end)
             reclaim_row(claims_ws, row, token, now() + lease, now())
+            outcome = "claimed" if users else "reclaim_empty"
             return {"users": users, "exhausted": False, "claim_id": claim_id,
-                    "claim_row": row, "reclaimed": True}
+                    "claim_row": row, "reclaimed": True, "outcome": outcome}
 
         # 2. New work: next slice after the cursor.
         cursor = get_cursor(state_ws) or None
         users = fetch(after=cursor, limit=limit)
         if not users:
             return {"users": [], "exhausted": True, "claim_id": None,
-                    "claim_row": None, "reclaimed": False}
+                    "claim_row": None, "reclaimed": False, "outcome": "exhausted"}
         new_cursor = users[-1]["email"]
         set_cursor(state_ws, new_cursor)
         claim_id = uuid.uuid4().hex
         row = append_claim(claims_ws, claim_id, cursor or "", new_cursor, token,
                            now() + lease, now())
         return {"users": users, "exhausted": len(users) < limit, "claim_id": claim_id,
-                "claim_row": row, "reclaimed": False}
+                "claim_row": row, "reclaimed": False, "outcome": "claimed"}
     finally:
         if lock:
             release_lock(state_ws, token)
@@ -104,6 +122,12 @@ def main(argv=None) -> int:
         except ValueError:
             print("claim: BATCH_SIZE must be an integer", file=sys.stderr)
             return 2
+
+    if STOP_FILE.exists():
+        print("STOP file present → draining; rm .cache/STOP to resume", file=sys.stderr)
+        json.dump(_drain_result(), sys.stdout)
+        sys.stdout.write("\n")
+        return 0
 
     spreadsheet = open_spreadsheet()
     state_ws = state_worksheet(spreadsheet)

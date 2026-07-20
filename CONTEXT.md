@@ -59,6 +59,21 @@ The guarantee that multiple people running the Workflow at once neither process 
 write duplicate `output` rows — provided by Claim + the lease-lock. (Best-effort, not a hard
 transaction — see ADR 0003.)
 
+**window**:
+A bounded span of wall-clock time the pipeline may run in: a `start` plus either a `drainAt` or a
+`stopBy`. `scripts/schedule_windows.py` derives every other timestamp (drain, hard-stop, guards) from
+these two, so nothing is computed by a model at fire time.
+
+**drain**:
+The soft-stop signal for a window: `claim.py` refuses to claim new work but lets any already-claimed
+batch finish resolving/persisting rather than killing it. Triggered by the **STOP file**; recoverable
+via the existing lease-based reclaim (ADR 0003), same as any other interrupted claim.
+
+**STOP file**:
+`.cache/STOP` — the sentinel `claim.py` checks on every invocation (before `open_spreadsheet()`, and
+again under the lock) to decide whether to **drain**. Present → drain; removed → normal claiming
+resumes. Gitignored, like the rest of `.cache/`.
+
 **Reverse resolution**:
 Resolving a user (email + name) back to their Instagram `username` via agentic web OSINT.
 

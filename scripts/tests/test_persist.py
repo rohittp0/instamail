@@ -118,3 +118,72 @@ def test_run_dedups_against_existing_output(public_user):
     assert n == 1                                  # old@ already present, new@ deduped to one
     assert [r[COL["email"]] for r in captured] == ["new@x.com"]
     assert fetched_usernames == ["beta"]           # stats not fetched for the skipped/dup rows
+
+
+def test_run_defers_throttled_row_without_handle(public_user):
+    """A rate_limited row with no handle is a transient failure: skip it, keep the claim open."""
+    captured = []
+
+    async def fake_fetch(usernames):
+        assert usernames == ["alpha"]              # deferred row has no username to fetch
+        s = project_profile(public_user)
+        s["stats_status"] = "ok"
+        return {"alpha": s}
+
+    resolve_rows = [
+        {"email": "jane@example.com", "username": "alpha", "match_confidence": "low",
+         "evidence_url": "", "rate_limited": False},
+        {"email": "blocked@x.com", "username": None, "match_confidence": "none",
+         "evidence_url": "", "rate_limited": True},   # throttled, no handle -> defer, don't persist
+    ]
+    marked = []
+    n = run(resolve_rows, fetch=fake_fetch, appender=lambda rs: captured.extend(rs) or len(rs),
+            now=lambda: "T", mark_done=lambda: marked.append(True))
+
+    assert n == 1                                     # only the resolved row is written
+    assert [r[COL["email"]] for r in captured] == ["jane@example.com"]
+    assert marked == []                               # claim left open -> reclaimed & retried later
+
+
+def test_run_keeps_throttled_row_that_found_a_handle(public_user):
+    """rate_limited but a handle WAS found -> a valid result: persist it and close the claim."""
+    captured = []
+
+    async def fake_fetch(usernames):
+        s = project_profile(public_user)
+        s["stats_status"] = "ok"
+        return {u: s for u in usernames}
+
+    resolve_rows = [
+        {"email": "beta@x.com", "username": "beta", "match_confidence": "medium",
+         "evidence_url": "", "rate_limited": True},
+    ]
+    marked = []
+    n = run(resolve_rows, fetch=fake_fetch, appender=lambda rs: captured.extend(rs) or len(rs),
+            now=lambda: "T", mark_done=lambda: marked.append(True))
+
+    assert n == 1
+    assert [r[COL["email"]] for r in captured] == ["beta@x.com"]
+    assert marked == [True]                           # nothing deferred -> claim closed
+
+
+def test_run_all_throttled_writes_nothing_and_keeps_claim():
+    """A fully throttled batch appends zero rows and never closes the claim."""
+    captured = []
+
+    async def fake_fetch(usernames):
+        return {}
+
+    resolve_rows = [
+        {"email": "a@x.com", "username": None, "match_confidence": "none",
+         "evidence_url": "", "rate_limited": True},
+        {"email": "b@x.com", "username": "", "match_confidence": "none",
+         "evidence_url": "", "rate_limited": True},
+    ]
+    marked = []
+    n = run(resolve_rows, fetch=fake_fetch, appender=lambda rs: captured.extend(rs) or len(rs),
+            now=lambda: "T", mark_done=lambda: marked.append(True))
+
+    assert n == 0
+    assert captured == []
+    assert marked == []
