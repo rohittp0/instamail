@@ -4,6 +4,7 @@
 __pycache__/
 *.pyc
 uv.lock
+*.egg-info/
 
 # Secrets & local data — never commit
 .env
