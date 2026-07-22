@@ -3,6 +3,7 @@
 .pytest_cache/
 __pycache__/
 *.pyc
+uv.lock
 
 # Secrets & local data — never commit
 .env
