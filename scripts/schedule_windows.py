@@ -168,18 +168,22 @@ def _launch_prompt(w, run_id, repo_root, active_json_abs, stop_file_abs, skill_m
 
 0. Read {active_json_abs}. If missing or unparseable: setup never completed cleanly -- log a note
    to stderr and STOP. Do not launch anything against a cold/corrupt state.
-1. {cleanup}
-2. Time guard: if now is at or past this window's guard ({w["guard"].isoformat()}), this is
-   save-only -- do NOT launch. Append a save-only note to {events_abs} and stop here.
-3. Check active.json's active-task set. If a task from a PRIOR window is still marked
-   launching/active (its failsafe did not settle it), do NOT silently skip this launch:
+1. Time guard FIRST: if now is at or past this window's guard ({w["guard"].isoformat()}), this is
+   save-only -- do NOT launch, do not clear {stop_file_abs}, do not remove any watchdog (an
+   earlier window's overdue drain/failsafe may still depend on them). Append a save-only note to
+   {events_abs} and stop here.
+2. Check active.json's active-task set. If a task from a PRIOR window is still marked
+   launching/active (its failsafe did not settle it), do NOT clean up and do NOT silently skip:
+   leave {stop_file_abs} in place (touch it if absent) so that task cannot claim new work, then:
    a. TaskOutput(task_id=<the task-id>, block=false) to check without waiting (TaskGet/TaskList
       are the TODO-task list, not background tasks -- do not use them here). If it actually
-      finished, mark it handled in active.json and continue to step 4.
+      finished, mark it handled in active.json and continue to step 3.
    b. Otherwise create ONE singleton retry cron for reconciliation at now+10min (or save-only if
       that would be past this window's guard), prompt: "Reconcile stuck task <task-id> from an
       earlier window per {skill_md_rel}, then retry this window's launch." Clear any other
-      pending-retry id first (at most one pending retry ever exists).
+      pending-retry id first (at most one pending retry ever exists). Stop here -- no cleanup,
+      no launch.
+3. Only now, immediately before launching, clean up: {cleanup}
 4. Clear this window's pending-retry id in active.json, if any.
 5. Write a `launching` marker for window {idx} into active.json (atomic temp-file + os.replace).
 6. Launch the email-to-instagram Workflow now. Record the returned task-id in active.json's

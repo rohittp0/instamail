@@ -142,6 +142,37 @@ def test_render_schedule_produces_cron_and_launchd_and_prompts():
     assert str(w1["watchdog"]["target_epoch"]) in w1["launchd_cmd"]
 
 
+def test_launch_prompt_guard_and_reconcile_precede_stop_clear():
+    """Sleep-drift race (Codex review 2026-08-16): an overdue W2 launch processed before W1's
+    overdue failsafe must not clear .cache/STOP while W1's task may still be active. The rendered
+    LAUNCH prompt must check the time guard and reconcile prior-window tasks BEFORE any cleanup,
+    and only clear STOP / remove the prior watchdog immediately before actually launching."""
+    spec = {"windows": [
+        {"start": "23:00", "drainAt": "00:10"},
+        {"start": "00:30", "drainAt": "03:26"},
+    ]}
+    resolved = resolve_windows(spec, TONIGHT)
+    out = render_schedule(resolved, run_id="w20260719T211300", repo_root=Path("/repo"))
+
+    for w in out["windows"]:
+        p = w["prompts"]["launch"]
+        guard_at = p.index("Time guard")
+        stop_clear_at = p.index("rm -f /repo/.cache/STOP")
+        launch_at = p.index("Launch the email-to-instagram Workflow")
+        # guard first, STOP-clear only immediately before the actual launch
+        assert guard_at < stop_clear_at < launch_at
+        # the save-only path must explicitly forbid touching STOP or any watchdog
+        assert "do not clear" in p.lower()
+
+    p2 = out["windows"][1]["prompts"]["launch"]
+    # prior-task reconciliation comes before cleanup and keeps STOP in place
+    reconcile_at = p2.index("PRIOR window")
+    assert p2.index("Time guard") < reconcile_at < p2.index("rm -f /repo/.cache/STOP")
+    assert "leave" in p2[reconcile_at:].split("4.")[0].lower()  # reconciliation branch keeps STOP
+    # prior watchdog removal is part of the late cleanup, after reconciliation
+    assert p2.index("com.instamail.wd1") > reconcile_at
+
+
 def test_build_schedule_end_to_end_matches_golden_matrix():
     spec = {"windows": [
         {"start": "23:00", "drainAt": "00:10"},

@@ -131,6 +131,17 @@ was stopped externally.
 4. **`stopped` is one of `rate-limited`, `agent-cap`, `token-budget`, `claim-error`,
    `reclaim-empty`** -> time guard first: if `now` is at or past this window's guard, this is
    save-only (same handling as a blackout, below) -- do not relaunch.
+   - **Account/session usage limit (check BEFORE the generic paths)**: if the evidence for a
+     `rate-limited` or `claim-error` stop -- the task's own output, the claim step's error text,
+     or a probe's error message -- names a **Claude account or session usage limit** (e.g.
+     "usage limit... resets at HH:MM"), this is NOT the WebSearch cap and NOT a provider
+     throttle: do **not** edit any cap, do **not** increment `provider_throttle_count`, and do
+     **not** relaunch immediately (a relaunch burns straight into the same exhausted usage
+     window). Instead create **one** retry cron at `stated_reset_time + 2min`, capped at this
+     window's guard (past the guard -> save-only), enforcing the singleton invariant. If no
+     reset time is stated, fall through to the generic paths below. (First seen 2026-07-19,
+     twice; distinct from both `CLAUDE_CODE_MAX_WEB_SEARCHES_PER_SESSION` and provider
+     throttling.)
    - **`rate-limited`**: probe with a single `WebSearch` call. If it comes back with a budget/quota-
      exhausted message, this was our own session cap -- raise it (edit the WebSearch env cap in
      `~/.claude/settings.json`, ×10 from its current value), set `cap_raised: true` in `active.json`
